@@ -4,7 +4,7 @@
  */
 
 import { Worker } from "bullmq";
-import { getRedisClient } from "./queue/redis";
+import { getRedisClient, getRedisConnectionOptions } from "./db/redis.ts";
 
 /**
  * Sets up and starts the webhook processing worker
@@ -36,7 +36,7 @@ export function setupWorker() {
       }
     },
     {
-      connection: getRedisClient(),
+      connection: getRedisConnectionOptions(),
       concurrency: 5, // Processes 5 jobs concurrently
       limiter: {
         max: 10,
@@ -80,4 +80,3 @@ export function setupWorker() {
 
   return worker;
 }
-

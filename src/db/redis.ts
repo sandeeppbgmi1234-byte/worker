@@ -4,8 +4,19 @@
  */
 
 import Redis from "ioredis";
+import type { ConnectionOptions } from "bullmq";
 
 let redisClient: Redis | null = null;
+
+/**
+ * Gets Redis connection options for BullMQ
+ * Returns connection string (BullMQ accepts connection string)
+ */
+export function getRedisConnectionOptions(): ConnectionOptions {
+  const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+  // BullMQ accepts connection string as ConnectionOptions
+  return redisUrl as ConnectionOptions;
+}
 
 /**
  * Gets or creates Redis connection
@@ -53,4 +64,3 @@ export async function closeRedisConnection(): Promise<void> {
     redisClient = null;
   }
 }
-

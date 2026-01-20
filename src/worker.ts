@@ -4,12 +4,14 @@
  */
 
 import { Worker } from "bullmq";
-import { getRedisClient, getRedisConnectionOptions } from "./db/redis.ts";
+import { getRedisConnectionOptions } from "./db/redis.ts";
 
 /**
  * Sets up and starts the webhook processing worker
  */
 export function setupWorker() {
+  const connectionOptions = getRedisConnectionOptions();
+
   const worker = new Worker(
     "webhook-processing",
     async (job) => {
@@ -36,7 +38,7 @@ export function setupWorker() {
       }
     },
     {
-      connection: getRedisConnectionOptions(),
+      connection: connectionOptions,
       concurrency: 5, // Processes 5 jobs concurrently
       limiter: {
         max: 10,
@@ -67,14 +69,12 @@ export function setupWorker() {
   process.on("SIGTERM", async () => {
     console.log("🛑 SIGTERM received, closing worker...");
     await worker.close();
-    await getRedisClient().quit();
     process.exit(0);
   });
 
   process.on("SIGINT", async () => {
     console.log("🛑 SIGINT received, closing worker...");
     await worker.close();
-    await getRedisClient().quit();
     process.exit(0);
   });
 

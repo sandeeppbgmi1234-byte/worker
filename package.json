@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun dist/index.js",
-    "prebuild": "cd ../.. && prisma generate",
     "build": "bun build src/index.ts --outdir dist --outfile dist/index.js --target bun --minify",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",

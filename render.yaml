@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: insta-auto-worker
+    runtime: bun
+    plan: starter
+    buildCommand: bun install && cd packages/worker && bun install && npm run build
+    startCommand: cd packages/worker && bun dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WORKER_PORT
+        value: 8080
+      - key: DATABASE_URL
+        sync: false
+      - key: UPSTASH_REDIS_HOST
+        sync: false
+      - key: UPSTASH_REDIS_USERNAME
+        sync: false
+      - key: UPSTASH_REDIS_PASSWORD
+        sync: false

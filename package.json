@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun dist/index.js",
-    "postinstall": "cd ../.. && bunx prisma generate && if [ -d node_modules/.prisma/client ]; then mkdir -p packages/worker/node_modules/.prisma && cp -r node_modules/.prisma/client packages/worker/node_modules/.prisma/client; fi",
+    "postinstall": "cd ../.. && bunx prisma generate && rm -rf packages/worker/node_modules/.prisma && cp -rL node_modules/.prisma packages/worker/node_modules/.prisma",
     "build": "bun build src/index.ts --outdir dist --outfile dist/index.js --target bun --minify --packages external",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",

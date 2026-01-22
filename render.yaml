@@ -3,8 +3,8 @@ services:
     name: insta-auto-worker
     runtime: bun
     plan: starter
-    buildCommand: bun install && bunx prisma generate && cd packages/worker && bun install && cd ../.. && if [ -d node_modules/.prisma/client ]; then mkdir -p packages/worker/node_modules/.prisma && cp -r node_modules/.prisma/client packages/worker/node_modules/.prisma/client; fi && cd packages/worker && npm run build
-    startCommand: cd packages/worker && bun dist/index.js
+    buildCommand: cd ../.. && bun install && bunx prisma generate && cd packages/worker && bun install && cd ../.. && bunx prisma generate --schema=./prisma/schema.prisma && rm -rf packages/worker/node_modules/.prisma && cp -rL node_modules/.prisma packages/worker/node_modules/.prisma && test -f packages/worker/node_modules/.prisma/client/index.js && echo "✓ Prisma client ready" || (echo "✗ Prisma setup failed" && ls -la packages/worker/node_modules/.prisma 2>&1 && exit 1) && cd packages/worker && npm run build
+    startCommand: bun dist/index.js
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV

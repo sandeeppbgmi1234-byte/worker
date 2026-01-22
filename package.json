@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun dist/index.js",
-    "build": "bun build src/index.ts --outdir dist --outfile dist/index.js --target bun --minify",
+    "build": "bun build src/index.ts --outdir dist --outfile dist/index.js --target bun --minify --packages external",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "docker:logs": "docker-compose logs -f",

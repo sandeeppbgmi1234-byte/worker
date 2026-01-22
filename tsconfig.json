@@ -13,7 +13,8 @@
     "noEmit": true,
     "types": ["bun-types"],
     "paths": {
-      "@dm-broo/common-types": ["../common-types/src"]
+      "@dm-broo/common-types": ["../common-types/src"],
+      "@/*": ["../../src/*"]
     }
   },
   "include": ["src/**/*"],

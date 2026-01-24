@@ -5,10 +5,8 @@ generator client {
 
 datasource db {
   provider = "mongodb"
+  url      = env("DATABASE_URL")
 }
-
-// Moves connection URL to prisma.config.ts as required by Prisma 5/7.
-// See: https://pris.ly/d/config-datasource
 
 model User {
   id           String        @id @default(auto()) @map("_id") @db.ObjectId

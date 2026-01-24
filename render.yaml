@@ -3,7 +3,7 @@ services:
     name: insta-auto-worker
     runtime: bun
     plan: starter
-    buildCommand: cd packages/worker && bun install && npx prisma generate && npm run build
+    buildCommand: bun install && npx prisma generate && bun run build
     startCommand: bun dist/index.js
     healthCheckPath: /health
     envVars:

@@ -5,6 +5,7 @@
 
 import { Worker } from "bullmq";
 import { getRedisConnectionOptions } from "./db/redis.ts";
+import { processWebhookEvent } from "./lib/instagram/webhook/webhook-handler.ts";
 
 /**
  * Sets up and starts the webhook processing worker
@@ -18,13 +19,8 @@ export function setupWorker() {
       console.log(`📦 Processing webhook job ${job.id}`);
 
       try {
-        // Imports webhook handler from the main app
-        // Uses relative path from worker package to main app src
-        const webhookHandler = await import(
-          "../../../src/lib/instagram/webhook/webhook-handler.ts"
-        );
-
-        await webhookHandler.processWebhookEvent(job.data);
+        // Uses local webhook handler
+        await processWebhookEvent(job.data);
 
         console.log(`✅ Completed webhook job ${job.id}`);
       } catch (error) {

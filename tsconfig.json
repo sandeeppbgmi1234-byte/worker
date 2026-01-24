@@ -13,11 +13,10 @@
     "noEmit": true,
     "types": ["bun-types"],
     "paths": {
-      "@dm-broo/common-types": ["../common-types/src"],
-      "@/*": ["../../src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "../../src"]
 }
 

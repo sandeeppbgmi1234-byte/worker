@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun dist/index.js",
-    "postinstall": "cd ../.. && npx prisma generate && rm -rf packages/worker/node_modules/.prisma && cp -rL node_modules/.prisma packages/worker/node_modules/.prisma",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
     "build": "bun build src/index.ts --outdir dist --outfile dist/index.js --target bun --minify --packages external",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/bun": "latest",
+    "prisma": "^7.2.0",
     "typescript": "^5"
   }
 }

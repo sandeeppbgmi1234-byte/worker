@@ -1,0 +1,136 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "mongodb"
+}
+
+// Moves connection URL to prisma.config.ts as required by Prisma 5/7.
+// See: https://pris.ly/d/config-datasource
+
+model User {
+  id           String        @id @default(auto()) @map("_id") @db.ObjectId
+  clerkId      String        @unique
+  fullName     String
+  email        String        @unique
+  imageUrl     String?
+  createdAt    DateTime      @default(now())
+  instaAccount InstaAccount?
+  automations  Automation[]
+
+  @@map("users")
+}
+
+model InstaAccount {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @unique @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Instagram account details
+  instagramUserId   String  @unique //  // Instagram User ID (for API calls)
+  webhookUserId     String? @unique // Instagram Business Account ID (for webhooks)
+  username          String
+  profilePictureUrl String?
+  biography         String?
+  followersCount    Int?
+  followsCount      Int?
+  mediaCount        Int?
+  accountType       String? // BUSINESS, CREATOR, PERSONAL
+
+  // OAuth tokens (encrypted in production)
+  accessToken    String   @default("")
+  refreshToken   String?
+  tokenExpiresAt DateTime @default(now())
+  grantedScopes  String[] @default([])
+
+  // Facebook Page (required for messaging)
+  // facebookPageId   String?
+  // facebookPageName String?
+
+  // Connection metadata
+  connectedAt     DateTime @default(now())
+  lastSyncedAt    DateTime @default(now())
+  webhooksEnabled Boolean  @default(false)
+  isActive        Boolean  @default(true)
+
+  @@map("instagram_accounts")
+}
+
+model Automation {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Target post
+  postId      String
+  postCaption String?
+
+  // Trigger configuration
+  triggers  String[] // Keywords/phrases to match
+  matchType String   @default("CONTAINS") // CONTAINS, EXACT, REGEX
+
+  // Action configuration
+  actionType         String // DM or COMMENT_REPLY
+  replyMessage       String // User-defined message
+  commentReplyWhenDm String?
+
+  // Variables support: {username}, {comment_text}
+  useVariables Boolean @default(true)
+
+  // Status and metadata
+  status          String    @default("ACTIVE") // ACTIVE, PAUSED, DELETED
+  timesTriggered  Int       @default(0)
+  lastTriggeredAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  executions AutomationExecution[]
+
+  @@index([userId, status])
+  @@index([postId, status])
+  @@index([userId, postId, status])
+  @@map("automations")
+}
+
+model AutomationExecution {
+  id           String     @id @default(auto()) @map("_id") @db.ObjectId
+  automationId String     @db.ObjectId
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  // Comment/message details
+  commentId       String
+  commentText     String
+  commentUsername String
+  commentUserId   String
+
+  // Execution details
+  actionType         String // DM or COMMENT_REPLY
+  sentMessage        String
+  status             String // SUCCESS, FAILED, PENDING
+  errorMessage       String?
+  instagramMessageId String? // For tracking
+
+  executedAt DateTime @default(now())
+
+  @@index([automationId, status])
+  @@index([commentId, automationId])
+  @@map("automation_executions")
+}
+
+model WebhookEvent {
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  eventType       String // comment, message
+  instagramUserId String
+  payload         Json // Raw webhook payload
+  processed       Boolean   @default(false)
+  processedAt     DateTime?
+  error           String?
+  receivedAt      DateTime  @default(now())
+
+  @@index([instagramUserId, processed])
+  @@index([receivedAt])
+  @@map("webhook_events")
+}

@@ -140,31 +140,6 @@ export async function findExpiringTokens(
 }
 
 /**
- * Batch refreshes tokens for multiple accounts
- */
-export async function batchRefreshTokens(accountIds: string[]): Promise<{
-  successful: string[];
-  failed: Array<{ accountId: string; error: string }>;
-}> {
-  const successful: string[] = [];
-  const failed: Array<{ accountId: string; error: string }> = [];
-
-  for (const accountId of accountIds) {
-    try {
-      await refreshAccessToken(accountId);
-      successful.push(accountId);
-    } catch (error) {
-      failed.push({
-        accountId,
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-  }
-
-  return { successful, failed };
-}
-
-/**
  * Validates token by making a test API call using Instagram Graph API
  */
 export async function validateToken(

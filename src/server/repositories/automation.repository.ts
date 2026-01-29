@@ -185,7 +185,7 @@ export async function findAutomationByIdAndUserIdForUpdate(
 /**
  * Finds automations with filters
  */
-export async function findAutomations(filters: AutomationFilters) {
+export async function findUserAutomations(filters: AutomationFilters) {
   return executeWithErrorHandling(
     () => {
       const where: any = {};
@@ -219,7 +219,7 @@ export async function findAutomations(filters: AutomationFilters) {
       });
     },
     {
-      operation: "findAutomations",
+      operation: "findUserAutomations",
       model: "Automation",
       fallback: [], // Returns empty array on error
       retries: 1,

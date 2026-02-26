@@ -55,28 +55,43 @@ model InstaAccount {
   @@map("instagram_accounts")
 }
 
+// Embedded document for post-based automations
+type PostTarget {
+  id      String
+  caption String?
+}
+
+// Embedded document for story-based automations
+// Snapshotted at creation — story media expires after 24h
+type StoryTarget {
+  id        String
+  mediaUrl  String
+  mediaType String // IMAGE | VIDEO
+  caption   String?
+  permalink String
+  timestamp String // ISO timestamp
+}
+
 model Automation {
   id     String @id @default(auto()) @map("_id") @db.ObjectId
   userId String @db.ObjectId
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Target post
-  postId      String
-  postCaption String?
+  triggerType String       @default("COMMENT_ON_POST") // COMMENT_ON_POST | STORY_REPLY
+  post        PostTarget?
+  story       StoryTarget?
 
   // Trigger configuration
   triggers  String[] // Keywords/phrases to match
   matchType String   @default("CONTAINS") // CONTAINS, EXACT, REGEX
 
   // Action configuration
-  actionType         String // DM or COMMENT_REPLY
-  replyMessage       String // User-defined message
+  actionType         String // DM | COMMENT_REPLY
+  replyMessage       String
   commentReplyWhenDm String?
 
-  // Variables support: {username}, {comment_text}
   useVariables Boolean @default(true)
 
-  // Status and metadata
   status          String    @default("ACTIVE") // ACTIVE, PAUSED, DELETED
   timesTriggered  Int       @default(0)
   lastTriggeredAt DateTime?
@@ -87,8 +102,7 @@ model Automation {
   executions AutomationExecution[]
 
   @@index([userId, status])
-  @@index([postId, status])
-  @@index([userId, postId, status])
+  @@index([userId, triggerType, status])
   @@map("automations")
 }
 

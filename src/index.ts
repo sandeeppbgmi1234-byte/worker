@@ -2,6 +2,7 @@ import { setupWorker } from "./worker";
 import { prisma } from "./db/db.ts";
 import Redis from "ioredis";
 import type { Worker } from "bullmq";
+import { logger } from "./lib/utils/pino.ts";
 
 const PORT = process.env.WORKER_PORT || 8080;
 
@@ -79,5 +80,5 @@ Bun.serve({
   },
 });
 
-console.log(`🚀 Worker service running on port ${PORT}`);
-console.log(`📍 Health check: http://localhost:${PORT}/health`);
+logger.info(`🚀 Worker service running on port ${PORT}`);
+logger.info(`📍 Health check: http://localhost:${PORT}/health`);

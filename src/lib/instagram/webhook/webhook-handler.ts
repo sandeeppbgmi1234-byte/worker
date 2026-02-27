@@ -10,7 +10,7 @@ import {
 } from "../../automation/matcher";
 import { executeAutomation } from "../../automation/executor";
 import { getValidAccessToken } from "../token-manager";
-import { logger } from "../../utils/logger";
+import { logger } from "../../utils/pino";
 import { prisma } from "../../../db/db";
 
 export interface WebhookEntry {
@@ -47,11 +47,14 @@ export async function processWebhookEvent(
 
   // Logs only essential fields to avoid logging large payload objects
   // and prevent issues with object references being mutated later
-  logger.info("processWebhookEvent", {
-    object: payload.object,
-    webhookId,
-    entryCount,
-  });
+  logger.info(
+    {
+      object: payload.object,
+      webhookId,
+      entryCount,
+    },
+    "processWebhookEvent",
+  );
 
   try {
     for (const entry of payload.entry) {
@@ -69,17 +72,17 @@ export async function processWebhookEvent(
         }
       }
     }
-  } catch (error) {
+  } catch (err) {
     logger.error(
-      "Critical error processing webhook event",
-      error instanceof Error ? error : new Error(String(error)),
       {
+        err: err instanceof Error ? err : new Error(String(err)),
         webhookId,
         object: payload.object,
         entryCount,
       },
+      "Critical error processing webhook event",
     );
-    throw error; // Re-throws to be caught by webhook service
+    throw err; // Re-throws to be caught by webhook service
   }
 }
 
@@ -103,17 +106,21 @@ async function processChange(
           await handleMessageEvent(instagramUserId, value);
           break;
         default:
-          logger.warn("Unknown webhook field", { field });
+          logger.warn({ field }, "Unknown webhook field");
       }
     })(),
     new Promise((_, reject) =>
       setTimeout(() => reject(new Error("Handler timeout")), 4000),
     ),
   ]).catch((error) => {
-    logger.error("processChange - Webhook processing failed", error, {
-      field,
-      instagramUserId,
-    });
+    logger.error(
+      {
+        field,
+        instagramUserId,
+      },
+      "processChange - Webhook processing failed",
+      error instanceof Error ? error : new Error(String(error)),
+    );
   });
 
   // Returns immediately - don't await the Promise.race
@@ -164,23 +171,29 @@ async function handleStoryReplyEvent(
     let accessToken: string;
     try {
       accessToken = await getValidAccessToken(instaAccount.id);
-    } catch (error) {
-      logger.error("Failed to get token for story reply", error as Error, {
-        instagramUserId,
-        storyId,
-      });
+    } catch (err) {
+      logger.error(
+        {
+          instagramUserId,
+          storyId,
+        },
+        "Failed to get token for story reply",
+      );
       return;
     }
 
     // TODO: Story reply automation matching logic (Phase 2/3)
-    logger.info("Story reply received", {
-      instagramUserId,
-      senderId,
-      storyId,
-      textPreview: text.substring(0, 50),
-    });
-  } catch (error) {
-    logger.error("Error processing story reply", error as Error);
+    logger.info(
+      {
+        instagramUserId,
+        senderId,
+        storyId,
+        textPreview: text.substring(0, 50),
+      },
+      "Story reply received",
+    );
+  } catch (err) {
+    logger.error(err, "Error processing story reply");
   }
 }
 
@@ -195,20 +208,26 @@ async function handleCommentEvent(
     // Validates comment
     const comment = validateCommentData(commentData);
     if (!comment) {
-      logger.warn("Invalid comment data in webhook", {
-        instagramUserId,
-        commentData: JSON.stringify(commentData).slice(0, 200),
-      });
+      logger.warn(
+        {
+          instagramUserId,
+          commentData: JSON.stringify(commentData).slice(0, 200),
+        },
+        "Invalid comment data in webhook",
+      );
       return;
     }
 
     // Extracts postId
     const postId = commentData.media?.id || commentData.media_id;
     if (!postId) {
-      logger.warn("Missing postId in comment event", {
-        instagramUserId,
-        commentId: comment.id,
-      });
+      logger.warn(
+        {
+          instagramUserId,
+          commentId: comment.id,
+        },
+        "Missing postId in comment event",
+      );
       return;
     }
 
@@ -257,12 +276,12 @@ async function handleCommentEvent(
       accessToken = await getValidAccessToken(instaAccount.id);
     } catch (error) {
       logger.error(
-        "Failed to get valid access token for webhook processing",
-        error instanceof Error ? error : new Error(String(error)),
         {
           instagramUserId,
           instaAccountId: instaAccount.id,
         },
+        "Failed to get valid access token for webhook processing",
+        error instanceof Error ? error : new Error(String(error)),
       );
       return;
     }
@@ -286,10 +305,13 @@ async function handleCommentEvent(
     processedChecks
       .filter(({ processed }) => processed)
       .forEach(({ match }) => {
-        logger.debug("Comment already processed", {
-          commentId: comment.id,
-          automationId: match.automation.id,
-        });
+        logger.debug(
+          {
+            commentId: comment.id,
+            automationId: match.automation.id,
+          },
+          "Comment already processed",
+        );
       });
 
     if (unprocessedMatches.length === 0) {
@@ -308,34 +330,37 @@ async function handleCommentEvent(
       const { match } = unprocessedMatches[index];
 
       if (result.status === "fulfilled") {
-        logger.info("Automation executed successfully", {
-          commentId: comment.id,
-          automationId: match.automation.id,
-          actionType: match.automation.actionType,
-        });
-      } else {
-        logger.error(
-          "Failed to execute automation for comment",
-          result.reason instanceof Error
-            ? result.reason
-            : new Error(String(result.reason)),
+        logger.info(
           {
             commentId: comment.id,
             automationId: match.automation.id,
             actionType: match.automation.actionType,
           },
+          "Automation executed successfully",
+        );
+      } else {
+        logger.error(
+          {
+            commentId: comment.id,
+            automationId: match.automation.id,
+            actionType: match.automation.actionType,
+          },
+          "Failed to execute automation for comment",
+          result.reason instanceof Error
+            ? result.reason
+            : new Error(String(result.reason)),
         );
       }
     });
   } catch (error) {
     logger.error(
-      "Error handling comment event",
-      error instanceof Error ? error : new Error(String(error)),
       {
         instagramUserId,
         commentId: commentData?.id,
         postId: commentData?.media?.id || commentData?.media_id,
       },
+      "Error handling comment event",
+      error instanceof Error ? error : new Error(String(error)),
     );
     throw error;
   }
@@ -351,10 +376,13 @@ async function handleIncomingMessage(
   // TODO: Phase 4 will implement message handling
   // For now, we just log that we received the event
 
-  logger.info("handleIncomingMessage", {
-    instagramUserId,
-    messagingEvent,
-  });
+  logger.info(
+    {
+      instagramUserId,
+      messagingEvent,
+    },
+    "handleIncomingMessage",
+  );
 }
 
 /**
@@ -366,8 +394,11 @@ async function handleMessageEvent(
 ): Promise<void> {
   // TODO: Implements message event handling
 
-  logger.info("handleMessageEvent", {
-    instagramUserId,
-    messageData,
-  });
+  logger.info(
+    {
+      instagramUserId,
+      messageData,
+    },
+    "handleMessageEvent",
+  );
 }

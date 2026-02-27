@@ -12,7 +12,7 @@ import {
   createMessagingRateLimitKey,
   createCommentsRateLimitKey,
 } from "../instagram/rate-limiter";
-import { logger } from "../utils/logger";
+import { logger } from "../utils/pino";
 import { findAutomationById } from "../../server/repositories/automation.repository";
 import { findInstaAccountByAutomationId } from "../../server/repositories/insta-account.repository";
 
@@ -35,7 +35,7 @@ export async function executeAutomation(
     const automation = await findAutomationById(automationId);
 
     if (!automation) {
-      logger.warn("Automation not found", { automationId });
+      logger.warn({ automationId }, "Automation not found");
       return {
         success: false,
         error: "Automation not found",
@@ -140,34 +140,43 @@ export async function executeAutomation(
 
               if (commentReplyResult.success) {
                 incrementRateLimit(commentReplyRateLimitKey);
-                logger.info("Comment reply sent after DM", {
-                  commentId: comment.id,
-                  automationId,
-                });
+                logger.info(
+                  {
+                    commentId: comment.id,
+                    automationId,
+                  },
+                  "Comment reply sent after DM",
+                );
               } else {
-                logger.warn("Failed to reply to comment after DM", {
-                  commentId: comment.id,
-                  automationId,
-                  error: commentReplyResult.error,
-                });
+                logger.warn(
+                  {
+                    commentId: comment.id,
+                    automationId,
+                    error: commentReplyResult.error,
+                  },
+                  "Failed to reply to comment after DM",
+                );
               }
             } else {
-              logger.warn("Rate limited for comment reply after DM", {
-                commentId: comment.id,
-                automationId,
-              });
+              logger.warn(
+                {
+                  commentId: comment.id,
+                  automationId,
+                },
+                "Rate limited for comment reply after DM",
+              );
             }
           } catch (commentReplyError) {
             // Logs error but doesn't fail the automation execution
             logger.error(
-              "Error replying to comment after DM",
-              commentReplyError instanceof Error
-                ? commentReplyError
-                : new Error(String(commentReplyError)),
               {
                 commentId: comment.id,
                 automationId,
               },
+              "Error replying to comment after DM",
+              commentReplyError instanceof Error
+                ? commentReplyError
+                : new Error(String(commentReplyError)),
             );
           }
         }
@@ -182,15 +191,15 @@ export async function executeAutomation(
           : "Unknown error executing action";
 
       logger.error(
-        "Failed to execute automation action",
-        actionError instanceof Error
-          ? actionError
-          : new Error(String(actionError)),
         {
           automationId,
           actionType: automation.actionType,
           commentId: comment.id,
         },
+        "Failed to execute automation action",
+        actionError instanceof Error
+          ? actionError
+          : new Error(String(actionError)),
       );
     }
 
@@ -240,12 +249,15 @@ export async function executeAutomation(
 
     // Logs execution result
     if (executionStatus !== "SUCCESS") {
-      logger.warn("Automation execution failed", {
-        automationId,
-        executionId: execution.id,
-        actionType: automation.actionType,
-        error: errorMessage,
-      });
+      logger.warn(
+        {
+          automationId,
+          executionId: execution.id,
+          actionType: automation.actionType,
+          error: errorMessage,
+        },
+        "Automation execution failed",
+      );
     }
     return {
       success: executionStatus === "SUCCESS",
@@ -259,20 +271,23 @@ export async function executeAutomation(
     // If it's a duplicate key, another worker already processed it.
     // We treat this as a success to avoid failing the queue job.
     if (isDuplicateKeyError(error)) {
-      logger.info("Automation execution skipped (already processed)", {
-        automationId,
-        commentId: comment.id,
-      });
+      logger.info(
+        {
+          automationId,
+          commentId: comment.id,
+        },
+        "Automation execution skipped (already processed)",
+      );
       return { success: true };
     }
 
     logger.error(
-      "Error in executeAutomation",
-      error instanceof Error ? error : new Error(String(error)),
       {
         automationId,
         commentId: comment.id,
       },
+      "Error in executeAutomation",
+      error instanceof Error ? error : new Error(String(error)),
     );
     return {
       success: false,

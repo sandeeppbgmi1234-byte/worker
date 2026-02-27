@@ -3,7 +3,7 @@ import {
   processWebhookEvent,
   InstagramWebhookPayload,
 } from "./lib/instagram/webhook/webhook-handler";
-import { logger } from "./lib/utils/logger";
+import { logger } from "./lib/utils/pino";
 
 const REDIS_CONNECTION = {
   host: process.env.UPSTASH_REDIS_HOST,

@@ -3,7 +3,7 @@
  * Provides fetch wrapper with timeout, retry logic, and error handling
  */
 
-import { logger } from "./logger";
+import { logger } from "./pino";
 
 /**
  * Default timeout for API requests (in milliseconds)
@@ -103,12 +103,15 @@ export async function fetchWithTimeout<T = any>(
 
         // Logs request if it took longer than expected
         if (duration > timeout * 0.8) {
-          logger.warn("Slow API request detected", {
-            url,
-            duration: `${duration}ms`,
-            timeout: `${timeout}ms`,
-            status: response.status,
-          });
+          logger.warn(
+            {
+              url,
+              duration: `${duration}ms`,
+              timeout: `${timeout}ms`,
+              status: response.status,
+            },
+            "Slow API request detected",
+          );
         }
 
         // Handles non-OK responses
@@ -118,12 +121,15 @@ export async function fetchWithTimeout<T = any>(
           // Retries if status code is retryable
           if (isRetryableError(null, response.status) && attempt < retries) {
             const delay = calculateBackoffDelay(attempt, retryDelay);
-            logger.warn(`API request failed, retrying: ${url}`, {
-              status: response.status,
-              attempt: attempt + 1,
-              maxRetries: retries,
-              delay: `${delay}ms`,
-            });
+            logger.warn(
+              {
+                status: response.status,
+                attempt: attempt + 1,
+                maxRetries: retries,
+                delay: `${delay}ms`,
+              },
+              `API request failed, retrying: ${url}`,
+            );
             await new Promise((resolve) => setTimeout(resolve, delay));
             continue;
           }
@@ -161,35 +167,38 @@ export async function fetchWithTimeout<T = any>(
 
         throw fetchError;
       }
-    } catch (error) {
-      lastError = error;
+    } catch (err) {
+      lastError = err;
 
       // Logs the error
       logger.error(
-        `API request failed: ${url}`,
-        error instanceof Error ? error : new Error(String(error)),
         {
           url,
           attempt: attempt + 1,
           maxRetries: retries,
           timeout: `${timeout}ms`,
         },
+        `API request failed: ${url}`,
+        err instanceof Error ? err : new Error(String(err)),
       );
 
       // Retries if error is retryable and attempts remain
-      if (isRetryableError(error, lastStatusCode) && attempt < retries) {
+      if (isRetryableError(err, lastStatusCode) && attempt < retries) {
         const delay = calculateBackoffDelay(attempt, retryDelay);
-        logger.warn(`Retrying API request: ${url}`, {
-          attempt: attempt + 1,
-          maxRetries: retries,
-          delay: `${delay}ms`,
-        });
+        logger.warn(
+          {
+            attempt: attempt + 1,
+            maxRetries: retries,
+            delay: `${delay}ms`,
+          },
+          `Retrying API request: ${url}`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
 
       // Re-throws error if not retryable or out of retries
-      throw error;
+      throw err;
     }
   }
 

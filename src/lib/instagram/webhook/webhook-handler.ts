@@ -143,9 +143,6 @@ async function processMessagingEvent(
   }
 }
 
-/**
- * Handles a story reply event
- */
 async function handleStoryReplyEvent(
   instagramUserId: string,
   messagingEvent: any,
@@ -154,17 +151,53 @@ async function handleStoryReplyEvent(
     const senderId = messagingEvent.sender.id;
     const storyId = messagingEvent.message.reply_to.story.id;
     const text = messagingEvent.message.text;
+    const messageId = messagingEvent.message.mid;
 
     if (!text || !storyId) {
       return;
     }
 
-    // Resolves access token
-    const instaAccount = await prisma.instaAccount.findFirst({
-      where: { instagramUserId },
-    });
+    // Resolves access token and account
+    const { findInstaAccountByInstagramUserId } =
+      await import("../../../server/repositories/insta-account.repository");
 
-    if (!instaAccount) {
+    const dbAccount = await findInstaAccountByInstagramUserId(
+      String(instagramUserId),
+    );
+
+    if (!dbAccount || !dbAccount.isActive) {
+      return;
+    }
+
+    const instaAccount = {
+      id: dbAccount.id,
+      userId: dbAccount.userId,
+    };
+
+    // Fetches active automations directly from DB
+    const { findActiveAutomationsByStory } =
+      await import("../../../server/repositories/automation.repository");
+
+    const automations = await findActiveAutomationsByStory(
+      instaAccount.userId,
+      storyId,
+    );
+
+    if (automations.length === 0) {
+      return;
+    }
+
+    // Map to CommentData format to reuse logic
+    const commentData = {
+      id: messageId,
+      text: text,
+      username: "user", // Story replies don't have username payload usually
+      userId: senderId,
+      timestamp: String(messagingEvent.timestamp),
+    };
+
+    const matches = await findMatchingAutomations(commentData, automations);
+    if (matches.length === 0) {
       return;
     }
 
@@ -173,25 +206,55 @@ async function handleStoryReplyEvent(
       accessToken = await getValidAccessToken(instaAccount.id);
     } catch (err) {
       logger.error(
-        {
-          instagramUserId,
-          storyId,
-        },
+        { instagramUserId, storyId },
         "Failed to get token for story reply",
       );
       return;
     }
 
-    // TODO: Story reply automation matching logic (Phase 2/3)
-    logger.info(
-      {
-        instagramUserId,
-        senderId,
-        storyId,
-        textPreview: text.substring(0, 50),
-      },
-      "Story reply received",
+    // Executes automations (idempotent)
+    const processedChecks = await Promise.all(
+      matches.map((match) =>
+        isCommentProcessed(commentData.id, match.automation.id).then(
+          (processed) => ({ match, processed }),
+        ),
+      ),
     );
+
+    const unprocessedMatches = processedChecks.filter(
+      ({ processed }) => !processed,
+    );
+
+    if (unprocessedMatches.length === 0) {
+      return;
+    }
+
+    const executionResults = await Promise.allSettled(
+      unprocessedMatches.map(({ match }) =>
+        executeAutomation(match.automation.id, commentData, accessToken),
+      ),
+    );
+
+    executionResults.forEach((result, index) => {
+      const { match } = unprocessedMatches[index];
+      if (result.status === "fulfilled" && result.value.success) {
+        logger.info(
+          {
+            messageId: commentData.id,
+            automationId: match.automation.id,
+          },
+          "Story reply automation executed successfully",
+        );
+      } else {
+        logger.error(
+          {
+            messageId: commentData.id,
+            automationId: match.automation.id,
+          },
+          "Failed to execute story reply automation",
+        );
+      }
+    });
   } catch (err) {
     logger.error(err, "Error processing story reply");
   }

@@ -101,7 +101,9 @@ export async function executeAutomation(
         // We use the commentId to reply privately to the comment which bypasses the 24h window for the first message
         const result = await sendDirectMessageWithRetry({
           recipientId: comment.userId,
-          commentId: comment.id,
+          // Only pass commentId if it's a comment reply; story replies execute as standard DMs.
+          commentId:
+            automation.triggerType === "STORY_REPLY" ? undefined : comment.id,
           message: finalMessage,
           accessToken,
         });

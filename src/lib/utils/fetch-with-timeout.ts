@@ -40,7 +40,10 @@ function isRetryableError(error: unknown, statusCode?: number): boolean {
 /**
  * Calculates delay for exponential backoff
  */
-function calculateBackoffDelay(attempt: number, baseDelay: number = 1000): number {
+function calculateBackoffDelay(
+  attempt: number,
+  baseDelay: number = 1000,
+): number {
   return Math.min(baseDelay * Math.pow(2, attempt), 10000); // Max 10 seconds
 }
 
@@ -61,7 +64,7 @@ export interface FetchResult<T = any> {
  */
 export async function fetchWithTimeout<T = any>(
   url: string,
-  options: FetchWithTimeoutOptions = {}
+  options: FetchWithTimeoutOptions = {},
 ): Promise<FetchResult<T>> {
   const {
     timeout = DEFAULT_TIMEOUT_MS,
@@ -136,7 +139,7 @@ export async function fetchWithTimeout<T = any>(
           throw new Error(
             errorData.error?.message ||
               errorData.message ||
-              `HTTP ${response.status}: ${response.statusText}`
+              `HTTP ${response.status}: ${response.statusText}`,
           );
         }
 
@@ -170,7 +173,7 @@ export async function fetchWithTimeout<T = any>(
           attempt: attempt + 1,
           maxRetries: retries,
           timeout: `${timeout}ms`,
-        }
+        },
       );
 
       // Retries if error is retryable and attempts remain
@@ -192,24 +195,4 @@ export async function fetchWithTimeout<T = any>(
 
   // This should never be reached, but TypeScript needs it
   throw lastError || new Error("Request failed after all retries");
-}
-
-/**
- * Fetches JSON from a URL with timeout
- * Simplified version for basic GET requests
- */
-export async function fetchJson<T = any>(
-  url: string,
-  options: FetchWithTimeoutOptions = {}
-): Promise<T> {
-  const result = await fetchWithTimeout<T>(url, {
-    ...options,
-    method: options.method || "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
-
-  return result.data;
 }

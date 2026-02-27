@@ -30,7 +30,7 @@ export interface SendMessageResult {
  * Sends a direct message on Instagram
  */
 export async function sendDirectMessage(
-  options: SendMessageOptions
+  options: SendMessageOptions,
 ): Promise<SendMessageResult> {
   try {
     // Validates message length
@@ -98,45 +98,8 @@ export async function sendDirectMessage(
       error:
         error instanceof Error
           ? error.message
-          : ERROR_MESSAGES.SERVER.INTERNAL_ERROR,
+          : ERROR_MESSAGES.API.GENERIC_ERROR,
     };
-  }
-}
-
-/**
- * Checks if messaging is allowed (within 24-hour window)
- */
-export async function checkMessagingWindow(
-  recipientId: string,
-  accessToken: string
-): Promise<boolean> {
-  try {
-    // Gets conversation info from Instagram Graph API
-    const url = buildGraphApiUrl(recipientId);
-    url.searchParams.set("fields", "last_message_time");
-    url.searchParams.set("access_token", accessToken);
-
-    const result = await fetchWithTimeout<any>(url.toString(), {
-      method: "GET",
-      timeout: 10000,
-      retries: 1,
-    });
-
-    const data = result.data;
-
-    if (!data.last_message_time) {
-      return false;
-    }
-
-    // Checks if within 24 hours
-    const lastMessageTime = new Date(data.last_message_time);
-    const now = new Date();
-    const hoursDiff =
-      (now.getTime() - lastMessageTime.getTime()) / (1000 * 60 * 60);
-
-    return hoursDiff <= MESSAGING_CONSTRAINTS.WINDOW_HOURS;
-  } catch (error) {
-    return false;
   }
 }
 
@@ -145,7 +108,7 @@ export async function checkMessagingWindow(
  */
 export async function sendDirectMessageWithRetry(
   options: SendMessageOptions,
-  maxRetries: number = 3
+  maxRetries: number = 3,
 ): Promise<SendMessageResult> {
   let lastError: string = "";
 

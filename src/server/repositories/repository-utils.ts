@@ -19,6 +19,13 @@ export enum DatabaseErrorType {
 }
 
 /**
+ * Checks if an error is a duplicate key error (P2002)
+ */
+export function isDuplicateKeyError(error: unknown): boolean {
+  return classifyPrismaError(error) === DatabaseErrorType.UNIQUE_CONSTRAINT;
+}
+
+/**
  * Classifies Prisma errors
  */
 export function classifyPrismaError(error: unknown): DatabaseErrorType {
@@ -87,7 +94,7 @@ export async function executeWithErrorHandling<T>(
     model?: string;
     fallback?: T;
     retries?: number;
-  }
+  },
 ): Promise<T> {
   const { operation: opName, model, fallback, retries = 0 } = context;
   let lastError: unknown;
@@ -114,7 +121,7 @@ export async function executeWithErrorHandling<T>(
             error instanceof Prisma.PrismaClientKnownRequestError
               ? error.code
               : undefined,
-        }
+        },
       );
 
       // Retries if error is retryable and attempts remain
@@ -154,7 +161,7 @@ export async function executeTransaction<T>(
     operation: string;
     models?: string[];
     retries?: number;
-  }
+  },
 ): Promise<T> {
   const { operation: opName, models, retries = 3 } = context;
   const startTime = Date.now();
@@ -173,7 +180,7 @@ export async function executeTransaction<T>(
             operation: opName,
             models: models || [],
             attempt: attempt + 1,
-          }
+          },
         );
       } else {
         logger.debug(`Starting transaction: ${opName}`, {
@@ -210,7 +217,7 @@ export async function executeTransaction<T>(
             error instanceof Prisma.PrismaClientKnownRequestError
               ? error.code
               : undefined,
-        }
+        },
       );
 
       // Retries if error is retryable and attempts remain

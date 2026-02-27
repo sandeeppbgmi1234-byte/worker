@@ -26,11 +26,11 @@ export interface ReplyToCommentResult {
  * Replies to a comment on Instagram
  */
 export async function replyToComment(
-  options: ReplyToCommentOptions
+  options: ReplyToCommentOptions,
 ): Promise<ReplyToCommentResult> {
   try {
     const url = buildGraphApiUrl(
-      GRAPH_API.ENDPOINTS.REPLY_COMMENT(options.commentId)
+      GRAPH_API.ENDPOINTS.REPLY_COMMENT(options.commentId),
     );
 
     const result = await fetchWithTimeout<any>(url.toString(), {
@@ -56,7 +56,7 @@ export async function replyToComment(
       error:
         error instanceof Error
           ? error.message
-          : ERROR_MESSAGES.SERVER.INTERNAL_ERROR,
+          : ERROR_MESSAGES.API.GENERIC_ERROR,
     };
   }
 }
@@ -66,7 +66,7 @@ export async function replyToComment(
  */
 export async function replyToCommentWithRetry(
   options: ReplyToCommentOptions,
-  maxRetries: number = 3
+  maxRetries: number = 3,
 ): Promise<ReplyToCommentResult> {
   let lastError: string = "";
 
@@ -99,69 +99,4 @@ export async function replyToCommentWithRetry(
     success: false,
     error: `Failed after ${maxRetries} attempts: ${lastError}`,
   };
-}
-
-/**
- * Deletes a comment or reply
- */
-export async function deleteComment(
-  commentId: string,
-  accessToken: string
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const url = buildGraphApiUrl(commentId);
-    url.searchParams.set("access_token", accessToken);
-
-    await fetchWithTimeout(url.toString(), {
-      method: "DELETE",
-      timeout: 15000,
-      retries: 1,
-    });
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : ERROR_MESSAGES.SERVER.INTERNAL_ERROR,
-    };
-  }
-}
-
-/**
- * Hides a comment
- */
-export async function hideComment(
-  commentId: string,
-  accessToken: string,
-  hide: boolean = true
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const url = buildGraphApiUrl(commentId);
-
-    await fetchWithTimeout(url.toString(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        hide,
-        access_token: accessToken,
-      }),
-      timeout: 15000,
-      retries: 1,
-    });
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : ERROR_MESSAGES.SERVER.INTERNAL_ERROR,
-    };
-  }
 }

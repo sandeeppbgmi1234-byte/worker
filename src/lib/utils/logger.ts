@@ -82,7 +82,7 @@ function createLogEntry(
   level: LogLevel,
   message: string,
   context?: LogContext,
-  error?: Error
+  error?: Error,
 ): LogEntry {
   const entry: LogEntry = {
     timestamp: new Date().toISOString(),
@@ -138,7 +138,10 @@ function outputLog(entry: LogEntry): void {
   }
 
   // Outputs structured JSON in development for better debugging
-  if (process.env.NODE_ENV === "development" && entry.level === LogLevel.ERROR) {
+  if (
+    process.env.NODE_ENV === "development" &&
+    entry.level === LogLevel.ERROR
+  ) {
     console.error("Structured:", structured);
   }
 }
@@ -180,59 +183,6 @@ class Logger {
   }
 
   /**
-   * Logs an API request
-   */
-  logRequest(
-    method: string,
-    path: string,
-    statusCode?: number,
-    duration?: number,
-    context?: LogContext
-  ): void {
-    const message = `${method} ${path}${statusCode ? ` ${statusCode}` : ""}${duration ? ` ${duration}ms` : ""}`;
-    const requestContext = {
-      ...context,
-      method,
-      path,
-      statusCode,
-      duration,
-    };
-
-    if (statusCode && statusCode >= 500) {
-      this.error(message, undefined, requestContext);
-    } else if (statusCode && statusCode >= 400) {
-      this.warn(message, requestContext);
-    } else {
-      this.info(message, requestContext);
-    }
-  }
-
-  /**
-   * Logs a database operation
-   */
-  logDatabase(
-    operation: string,
-    model: string,
-    duration?: number,
-    error?: Error,
-    context?: LogContext
-  ): void {
-    const message = `DB ${operation} ${model}${duration ? ` ${duration}ms` : ""}`;
-    const dbContext = {
-      ...context,
-      operation,
-      model,
-      duration,
-    };
-
-    if (error) {
-      this.error(message, error, dbContext);
-    } else {
-      this.info(message, dbContext);
-    }
-  }
-
-  /**
    * Logs a webhook event
    */
   logWebhook(
@@ -240,7 +190,7 @@ class Logger {
     source: string,
     success: boolean,
     error?: Error,
-    context?: LogContext
+    context?: LogContext,
   ): void {
     const message = `Webhook ${eventType} from ${source} - ${success ? "success" : "failed"}`;
     const webhookContext = {

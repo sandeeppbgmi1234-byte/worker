@@ -71,7 +71,8 @@ export function validateRegexPattern(pattern: string): {
   if (containsDangerousPattern(pattern)) {
     return {
       valid: false,
-      error: "Pattern contains potentially dangerous constructs that could cause ReDoS",
+      error:
+        "Pattern contains potentially dangerous constructs that could cause ReDoS",
     };
   }
 
@@ -93,10 +94,7 @@ export function validateRegexPattern(pattern: string): {
  * Note: JavaScript regex execution is synchronous and cannot be truly interrupted,
  * but we limit input size and validate patterns to minimize risk
  */
-async function safeRegexTest(
-  regex: RegExp,
-  text: string
-): Promise<boolean> {
+async function safeRegexTest(regex: RegExp, text: string): Promise<boolean> {
   return new Promise((resolve) => {
     // Limits text length to prevent excessive processing
     // Instagram comments are max 2200 chars, but we add buffer for safety
@@ -130,7 +128,7 @@ async function safeRegexTest(
 export async function safeRegexMatch(
   pattern: string,
   text: string,
-  flags: string = "i"
+  flags: string = "i",
 ): Promise<boolean> {
   // Validates pattern first
   const validation = validateRegexPattern(pattern);
@@ -146,32 +144,6 @@ export async function safeRegexMatch(
     return await safeRegexTest(regex, text);
   } catch (error) {
     // Returns false on any error (invalid pattern, etc.)
-    return false;
-  }
-}
-
-/**
- * Synchronous version for cases where async is not feasible
- * Uses a simpler approach with pattern validation only
- * Note: This doesn't provide timeout protection, but validates pattern safety
- */
-export function safeRegexMatchSync(
-  pattern: string,
-  text: string,
-  flags: string = "i"
-): boolean {
-  // Validates pattern first
-  const validation = validateRegexPattern(pattern);
-  if (!validation.valid) {
-    return false;
-  }
-
-  try {
-    const regex = new RegExp(pattern, flags);
-    // Limits text length to prevent excessive processing
-    const limitedText = text.substring(0, 10000); // Max 10KB of text to match
-    return regex.test(limitedText);
-  } catch (error) {
     return false;
   }
 }

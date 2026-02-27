@@ -28,7 +28,7 @@ export interface ExecutionResult {
 export async function executeAutomation(
   automationId: string,
   comment: CommentData,
-  accessToken: string
+  accessToken: string,
 ): Promise<ExecutionResult> {
   try {
     // Gets the automation
@@ -67,7 +67,7 @@ export async function executeAutomation(
       if (automation.actionType === "COMMENT_REPLY") {
         // Checks rate limit
         const rateLimitKey = createCommentsRateLimitKey(
-          instaAccount.instagramUserId
+          instaAccount.instagramUserId,
         );
         if (isRateLimited(rateLimitKey)) {
           throw new Error("Rate limit exceeded for comment replies");
@@ -90,7 +90,7 @@ export async function executeAutomation(
       } else if (automation.actionType === "DM") {
         // Checks rate limit
         const rateLimitKey = createMessagingRateLimitKey(
-          instaAccount.instagramUserId
+          instaAccount.instagramUserId,
         );
         if (isRateLimited(rateLimitKey)) {
           throw new Error("Rate limit exceeded for direct messages");
@@ -118,7 +118,7 @@ export async function executeAutomation(
         if (automation.commentReplyWhenDm) {
           try {
             const commentReplyRateLimitKey = createCommentsRateLimitKey(
-              instaAccount.instagramUserId
+              instaAccount.instagramUserId,
             );
 
             // Checks rate limit for comment replies
@@ -128,7 +128,7 @@ export async function executeAutomation(
               if (automation.useVariables) {
                 commentReplyMessage = replaceVariables(
                   commentReplyMessage,
-                  comment
+                  comment,
                 );
               }
 
@@ -167,7 +167,7 @@ export async function executeAutomation(
               {
                 commentId: comment.id,
                 automationId,
-              }
+              },
             );
           }
         }
@@ -190,15 +190,14 @@ export async function executeAutomation(
           automationId,
           actionType: automation.actionType,
           commentId: comment.id,
-        }
+        },
       );
     }
 
     // Records the execution and updates stats in a transaction
     // Ensures execution record and stats are updated atomically
-    const { executeTransaction } = await import(
-      "../../server/repositories/repository-utils"
-    );
+    const { executeTransaction } =
+      await import("../../server/repositories/repository-utils");
     const { prisma } = await import("../../db/db");
 
     const execution = await executeTransaction(
@@ -236,24 +235,8 @@ export async function executeAutomation(
       {
         operation: "executeAutomation",
         models: ["AutomationExecution", "Automation"],
-      }
+      },
     );
-
-    // Caches the execution result if successful
-    // This prevents duplicate processing on webhook retries
-    if (executionStatus === "SUCCESS") {
-      const { markCommentProcessed } = await import(
-        "../utils/automation-cache"
-      );
-      await markCommentProcessed(comment.id, automationId).catch((error) => {
-        // Logs error but doesn't fail the operation
-        logger.warn("Failed to cache processed comment", {
-          commentId: comment.id,
-          automationId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
 
     // Logs execution result
     if (executionStatus !== "SUCCESS") {
@@ -270,13 +253,26 @@ export async function executeAutomation(
       error: errorMessage || undefined,
     };
   } catch (error) {
+    const { isDuplicateKeyError } =
+      await import("../../server/repositories/repository-utils");
+
+    // If it's a duplicate key, another worker already processed it.
+    // We treat this as a success to avoid failing the queue job.
+    if (isDuplicateKeyError(error)) {
+      logger.info("Automation execution skipped (already processed)", {
+        automationId,
+        commentId: comment.id,
+      });
+      return { success: true };
+    }
+
     logger.error(
       "Error in executeAutomation",
       error instanceof Error ? error : new Error(String(error)),
       {
         automationId,
         commentId: comment.id,
-      }
+      },
     );
     return {
       success: false,
@@ -291,7 +287,7 @@ export async function executeAutomation(
 export async function batchExecuteAutomations(
   automationIds: string[],
   comment: CommentData,
-  accessToken: string
+  accessToken: string,
 ): Promise<ExecutionResult[]> {
   const results: ExecutionResult[] = [];
 

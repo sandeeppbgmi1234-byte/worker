@@ -11,8 +11,7 @@ import {
 import { executeAutomation } from "../../automation/executor";
 import { getValidAccessToken } from "../token-manager";
 import { logger } from "../../utils/logger";
-import { getRedisClient } from "../../../db/redis";
-const redis = getRedisClient();
+import { prisma } from "../../../db/db";
 
 export interface WebhookEntry {
   id: string;
@@ -41,7 +40,7 @@ export interface InstagramWebhookPayload {
  * Processes a webhook event
  */
 export async function processWebhookEvent(
-  payload: InstagramWebhookPayload
+  payload: InstagramWebhookPayload,
 ): Promise<void> {
   const webhookId = payload.entry?.[0]?.id || "unknown";
   const entryCount = payload.entry?.length || 0;
@@ -78,7 +77,7 @@ export async function processWebhookEvent(
         webhookId,
         object: payload.object,
         entryCount,
-      }
+      },
     );
     throw error; // Re-throws to be caught by webhook service
   }
@@ -89,7 +88,7 @@ export async function processWebhookEvent(
  */
 async function processChange(
   instagramUserId: string,
-  change: { field: string; value: any }
+  change: { field: string; value: any },
 ): Promise<void> {
   const { field, value } = change;
 
@@ -108,7 +107,7 @@ async function processChange(
       }
     })(),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Handler timeout")), 4000)
+      setTimeout(() => reject(new Error("Handler timeout")), 4000),
     ),
   ]).catch((error) => {
     logger.error("processChange - Webhook processing failed", error, {
@@ -125,11 +124,63 @@ async function processChange(
  */
 async function processMessagingEvent(
   instagramUserId: string,
-  messagingEvent: any
+  messagingEvent: any,
 ): Promise<void> {
   // Processes the message
   if (messagingEvent.message) {
-    await handleIncomingMessage(instagramUserId, messagingEvent);
+    if (messagingEvent.message.reply_to?.story) {
+      await handleStoryReplyEvent(instagramUserId, messagingEvent);
+    } else {
+      await handleIncomingMessage(instagramUserId, messagingEvent);
+    }
+  }
+}
+
+/**
+ * Handles a story reply event
+ */
+async function handleStoryReplyEvent(
+  instagramUserId: string,
+  messagingEvent: any,
+): Promise<void> {
+  try {
+    const senderId = messagingEvent.sender.id;
+    const storyId = messagingEvent.message.reply_to.story.id;
+    const text = messagingEvent.message.text;
+
+    if (!text || !storyId) {
+      return;
+    }
+
+    // Resolves access token
+    const instaAccount = await prisma.instaAccount.findFirst({
+      where: { instagramUserId },
+    });
+
+    if (!instaAccount) {
+      return;
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = await getValidAccessToken(instaAccount.id);
+    } catch (error) {
+      logger.error("Failed to get token for story reply", error as Error, {
+        instagramUserId,
+        storyId,
+      });
+      return;
+    }
+
+    // TODO: Story reply automation matching logic (Phase 2/3)
+    logger.info("Story reply received", {
+      instagramUserId,
+      senderId,
+      storyId,
+      textPreview: text.substring(0, 50),
+    });
+  } catch (error) {
+    logger.error("Error processing story reply", error as Error);
   }
 }
 
@@ -138,7 +189,7 @@ async function processMessagingEvent(
  */
 async function handleCommentEvent(
   instagramUserId: string,
-  commentData: any
+  commentData: any,
 ): Promise<void> {
   try {
     // Validates comment
@@ -161,127 +212,36 @@ async function handleCommentEvent(
       return;
     }
 
-    // Account gating (Redis → DB fallback)
+    // Account gating (Direct DB)
+    const { findInstaAccountByInstagramUserId } =
+      await import("../../../server/repositories/insta-account.repository");
 
-    const accountCacheKey = `ig:webhook:${instagramUserId}`;
+    const dbAccount = await findInstaAccountByInstagramUserId(
+      String(instagramUserId),
+    );
 
-    let instaAccount:
-      | {
-        id: string;
-        userId: string;
-        clerkId: string;
-        isActive: boolean;
-      }
-      | null = null;
-
-    const cachedAccount = await redis.get(accountCacheKey);
-    if (cachedAccount) {
-      const parsed = JSON.parse(cachedAccount) as
-        | {
-          id?: string;
-          userId?: string;
-          clerkId?: string;
-          isActive?: boolean;
-        }
-        | { isActive: false };
-
-      // Handles cached "inactive" marker without needing clerkId
-      if (parsed && parsed.isActive === false) {
-        return;
-      }
-
-      // Uses cached active account only if it includes clerkId (new format)
-      if (parsed && parsed.isActive && parsed.clerkId && parsed.userId && parsed.id) {
-        instaAccount = {
-          id: parsed.id,
-          userId: parsed.userId,
-          clerkId: parsed.clerkId,
-          isActive: true,
-        };
-      }
-    }
-
-    if (!instaAccount) {
-      const { findInstaAccountByInstagramUserId } = await import(
-        "../../../server/repositories/insta-account.repository"
-      );
-
-      const dbAccount = await findInstaAccountByInstagramUserId(
-        String(instagramUserId)
-      );
-
-      if (!dbAccount || !dbAccount.isActive) {
-        await redis.set(
-          accountCacheKey,
-          JSON.stringify({ isActive: false }),
-          "EX",
-          60 * 60
-        );
-        return;
-      }
-
-      instaAccount = {
-        isActive: true,
-        id: dbAccount.id,
-        userId: dbAccount.userId,
-        clerkId: dbAccount.user.clerkId,
-      };
-
-      await redis.set(
-        accountCacheKey,
-        JSON.stringify(instaAccount),
-        "EX",
-        60 * 60
-      );
-    }
-
-    // Automation existence cache (not logic)
-
-    const automationsCacheKey = `ig:automation:${instaAccount.clerkId}:${postId}`;
-
-    type AutomationExistenceCache =
-      | { hasAutomations: false }
-      | { hasAutomations: true };
-
-    let hasAutomations: boolean | null = null;
-
-    const cachedAutomationFlag = await redis.get(automationsCacheKey);
-    if (cachedAutomationFlag) {
-      const parsed: AutomationExistenceCache = JSON.parse(cachedAutomationFlag);
-      hasAutomations = parsed.hasAutomations;
-    }
-
-    if (hasAutomations === false) {
+    if (!dbAccount || !dbAccount.isActive) {
       return;
     }
 
-    // Fetches full automations (DB)
+    const instaAccount = {
+      id: dbAccount.id,
+      userId: dbAccount.userId,
+      clerkId: dbAccount.user?.clerkId || "",
+    };
 
-    const { findActiveAutomationsByPost } = await import(
-      "../../../server/repositories/automation.repository"
-    );
+    // Fetches active automations directly from DB
+    const { findActiveAutomationsByPost } =
+      await import("../../../server/repositories/automation.repository");
 
     const automations = await findActiveAutomationsByPost(
       instaAccount.userId,
-      postId
+      postId,
     );
 
     if (automations.length === 0) {
-      await redis.set(
-        automationsCacheKey,
-        JSON.stringify({ hasAutomations: false }),
-        "EX",
-        5 * 60
-      );
       return;
     }
-
-    await redis.set(
-      automationsCacheKey,
-      JSON.stringify({ hasAutomations: true }),
-      "EX",
-      5 * 60
-    );
 
     // Matches automations
 
@@ -302,7 +262,7 @@ async function handleCommentEvent(
         {
           instagramUserId,
           instaAccountId: instaAccount.id,
-        }
+        },
       );
       return;
     }
@@ -312,14 +272,14 @@ async function handleCommentEvent(
     const processedChecks = await Promise.all(
       matches.map((match) =>
         isCommentProcessed(comment.id, match.automation.id).then(
-          (processed) => ({ match, processed })
-        )
-      )
+          (processed) => ({ match, processed }),
+        ),
+      ),
     );
 
     // Filters out already-processed automations
     const unprocessedMatches = processedChecks.filter(
-      ({ processed }) => !processed
+      ({ processed }) => !processed,
     );
 
     // Logs skipped automations
@@ -339,8 +299,8 @@ async function handleCommentEvent(
     // Executes remaining automations in parallel
     const executionResults = await Promise.allSettled(
       unprocessedMatches.map(({ match }) =>
-        executeAutomation(match.automation.id, comment, accessToken)
-      )
+        executeAutomation(match.automation.id, comment, accessToken),
+      ),
     );
 
     // Logs results
@@ -363,7 +323,7 @@ async function handleCommentEvent(
             commentId: comment.id,
             automationId: match.automation.id,
             actionType: match.automation.actionType,
-          }
+          },
         );
       }
     });
@@ -375,7 +335,7 @@ async function handleCommentEvent(
         instagramUserId,
         commentId: commentData?.id,
         postId: commentData?.media?.id || commentData?.media_id,
-      }
+      },
     );
     throw error;
   }
@@ -386,7 +346,7 @@ async function handleCommentEvent(
  */
 async function handleIncomingMessage(
   instagramUserId: string,
-  messagingEvent: any
+  messagingEvent: any,
 ): Promise<void> {
   // TODO: Phase 4 will implement message handling
   // For now, we just log that we received the event
@@ -402,7 +362,7 @@ async function handleIncomingMessage(
  */
 async function handleMessageEvent(
   instagramUserId: string,
-  messageData: any
+  messageData: any,
 ): Promise<void> {
   // TODO: Implements message event handling
 

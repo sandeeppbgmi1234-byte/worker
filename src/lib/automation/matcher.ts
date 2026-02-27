@@ -40,7 +40,7 @@ export interface MatchResult {
  */
 export async function matchComment(
   comment: CommentData,
-  automation: Automation
+  automation: Automation,
 ): Promise<MatchResult> {
   const commentText = comment.text.toLowerCase().trim();
 
@@ -87,10 +87,10 @@ export async function matchComment(
  */
 export async function findMatchingAutomations(
   comment: CommentData,
-  automations: Automation[]
+  automations: Automation[],
 ): Promise<MatchResult[]> {
   const matchPromises = automations.map((automation) =>
-    matchComment(comment, automation)
+    matchComment(comment, automation),
   );
   const results = await Promise.all(matchPromises);
   return results.filter((result) => result.matched);
@@ -98,22 +98,16 @@ export async function findMatchingAutomations(
 
 /**
  * Checks if a comment was already processed by an automation
- * Uses caching to reduce DB load for already-processed comments
+ * Direct DB check (no cache layer)
  */
 export async function isCommentProcessed(
   commentId: string,
-  automationId: string
+  automationId: string,
 ): Promise<boolean> {
-  const { isCommentProcessed: checkProcessed } = await import(
-    "../../server/repositories/automation-execution.repository"
-  );
-  const { isCommentProcessedCached } = await import(
-    "../utils/automation-cache"
-  );
+  const { isCommentProcessed: checkProcessed } =
+    await import("../../server/repositories/automation-execution.repository");
 
-  return isCommentProcessedCached(commentId, automationId, () =>
-    checkProcessed(commentId, automationId)
-  );
+  return checkProcessed(commentId, automationId);
 }
 
 /**
@@ -122,7 +116,7 @@ export async function isCommentProcessed(
  */
 export function replaceVariables(
   message: string,
-  comment: CommentData
+  comment: CommentData,
 ): string {
   // Sanitizes comment data before variable replacement
   const sanitizedUsername = sanitizeUsername(comment.username);
@@ -150,7 +144,7 @@ export function validateCommentData(data: any): CommentData | null {
     id: sanitizeText(String(data.id), 100), // Comment IDs are typically short
     text: sanitizeCommentText(data.text),
     username: sanitizeUsername(
-      data.username || data.from?.username || "unknown"
+      data.username || data.from?.username || "unknown",
     ),
     userId: sanitizeText(String(data.from?.id || data.user?.id || ""), 100),
     timestamp: data.timestamp || new Date().toISOString(),

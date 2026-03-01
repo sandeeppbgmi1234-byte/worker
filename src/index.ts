@@ -13,9 +13,19 @@ let worker: Worker | null = null;
 try {
   worker = setupWorker();
 } catch (error) {
-  console.error("❌ Failed to start worker:", error);
+  logger.error(error, "❌ Failed to start worker:");
   process.exit(1);
 }
+
+// Graceful shutdown on SIGTERM
+process.on("SIGTERM", async () => {
+  logger.info("SIGTERM received, shutting down gracefully...");
+  if (worker) {
+    await worker.close();
+    logger.info("Worker closed");
+  }
+  process.exit(0);
+});
 
 // Lightweight HTTP server for health checks using Bun
 Bun.serve({

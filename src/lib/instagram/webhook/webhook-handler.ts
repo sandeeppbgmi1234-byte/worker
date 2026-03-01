@@ -11,7 +11,6 @@ import {
 import { executeAutomation } from "../../automation/executor";
 import { getValidAccessToken } from "../token-manager";
 import { logger } from "../../utils/pino";
-import { prisma } from "../../../db/db";
 
 export interface WebhookEntry {
   id: string;
@@ -42,8 +41,8 @@ export interface InstagramWebhookPayload {
 export async function processWebhookEvent(
   payload: InstagramWebhookPayload,
 ): Promise<void> {
-  const webhookId = payload.entry?.[0]?.id || "unknown";
-  const entryCount = payload.entry?.length || 0;
+  const webhookId = payload.entry?.[0]?.id;
+  const entryCount = payload.entry?.length;
 
   // Logs only essential fields to avoid logging large payload objects
   // and prevent issues with object references being mutated later
@@ -95,35 +94,14 @@ async function processChange(
 ): Promise<void> {
   const { field, value } = change;
 
-  // Processes event with timeout
-  Promise.race([
-    (async () => {
-      switch (field) {
-        case "comments":
-          await handleCommentEvent(instagramUserId, value);
-          break;
-        case "messages":
-          await handleMessageEvent(instagramUserId, value);
-          break;
-        default:
-          logger.warn({ field }, "Unknown webhook field");
-      }
-    })(),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Handler timeout")), 4000),
-    ),
-  ]).catch((error) => {
-    logger.error(
-      {
-        field,
-        instagramUserId,
-      },
-      "processChange - Webhook processing failed",
-      error instanceof Error ? error : new Error(String(error)),
-    );
-  });
-
-  // Returns immediately - don't await the Promise.race
+  // Processes different types of webhook changes
+  switch (field) {
+    case "comments":
+      await handleCommentEvent(instagramUserId, value);
+      break;
+    default:
+      logger.warn({ field }, "Unknown webhook field");
+  }
 }
 
 /**
@@ -138,7 +116,8 @@ async function processMessagingEvent(
     if (messagingEvent.message.reply_to?.story) {
       await handleStoryReplyEvent(instagramUserId, messagingEvent);
     } else {
-      await handleIncomingMessage(instagramUserId, messagingEvent);
+      // TODO: Implements message event handling
+      // await handleIncomingMessage(instagramUserId, messagingEvent);
     }
   }
 }
@@ -332,23 +311,6 @@ async function handleCommentEvent(
       return;
     }
 
-    // Resolves access token (DB authority)
-
-    let accessToken: string;
-    try {
-      accessToken = await getValidAccessToken(instaAccount.id);
-    } catch (error) {
-      logger.error(
-        {
-          instagramUserId,
-          instaAccountId: instaAccount.id,
-        },
-        "Failed to get valid access token for webhook processing",
-        error instanceof Error ? error : new Error(String(error)),
-      );
-      return;
-    }
-
     // Executes automations (idempotent)
     // Checks all automations in parallel to filter out already-processed ones
     const processedChecks = await Promise.all(
@@ -384,7 +346,7 @@ async function handleCommentEvent(
     // Executes remaining automations in parallel
     const executionResults = await Promise.allSettled(
       unprocessedMatches.map(({ match }) =>
-        executeAutomation(match.automation.id, comment, accessToken),
+        executeAutomation(match.automation.id, comment, dbAccount.accessToken),
       ),
     );
 
@@ -427,41 +389,4 @@ async function handleCommentEvent(
     );
     throw error;
   }
-}
-
-/**
- * Handles an incoming message (DM)
- */
-async function handleIncomingMessage(
-  instagramUserId: string,
-  messagingEvent: any,
-): Promise<void> {
-  // TODO: Phase 4 will implement message handling
-  // For now, we just log that we received the event
-
-  logger.info(
-    {
-      instagramUserId,
-      messagingEvent,
-    },
-    "handleIncomingMessage",
-  );
-}
-
-/**
- * Handles a message event from comments field
- */
-async function handleMessageEvent(
-  instagramUserId: string,
-  messageData: any,
-): Promise<void> {
-  // TODO: Implements message event handling
-
-  logger.info(
-    {
-      instagramUserId,
-      messageData,
-    },
-    "handleMessageEvent",
-  );
 }

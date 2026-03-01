@@ -31,6 +31,13 @@ export const RATE_LIMITS = {
   REQUEST_TIMEOUT_MS: 10000, // 10 seconds
 } as const;
 
+/**
+ * Builds a complete Graph API URL with version and endpoint
+ */
+export function buildGraphApiUrl(endpoint: string): URL {
+  return new URL(`${GRAPH_API.BASE_URL}/${GRAPH_API.VERSION}/${endpoint}`);
+}
+
 // Error messages (Used by Worker)
 export const ERROR_MESSAGES = {
   AUTH: {
@@ -57,10 +64,3 @@ export const ERROR_MESSAGES = {
     MESSAGE_TOO_LONG: "Message exceeds maximum length of 1000 characters.",
   },
 } as const;
-
-/**
- * Builds a complete Graph API URL with version and endpoint
- */
-export function buildGraphApiUrl(endpoint: string): URL {
-  return new URL(`${GRAPH_API.BASE_URL}/${GRAPH_API.VERSION}/${endpoint}`);
-}

@@ -37,41 +37,34 @@ export async function refreshAccessToken(
 
   const url = `https://graph.instagram.com/refresh_access_token?${params.toString()}`;
 
-  const { fetchWithTimeout } = await import("../utils/fetch-with-timeout");
+  const { fetchFromInstagram } = await import("./api/client");
 
-  try {
-    const result = await fetchWithTimeout<RefreshTokenResponse>(url, {
-      method: "GET",
-      timeout: 15000,
-      retries: 2,
-    });
+  // fetchFromInstagram inherently handles the token expiry errors and throws InstagramTokenExpiredError
+  // which will bubble up natively.
+  const data = await fetchFromInstagram<RefreshTokenResponse>(url, {
+    method: "GET",
+    timeoutMs: 15000,
+    retries: 2,
+    instagramUserId: accountId, // Helps track token refreshes per user
+  });
 
-    const data = result.data;
+  // Calculates new expiration date
+  const expiresAt = new Date(Date.now() + data.expires_in * 1000);
 
-    // Calculates new expiration date
-    const expiresAt = new Date(Date.now() + data.expires_in * 1000);
-
-    // Updates the database
-    await prisma.instaAccount.update({
-      where: { id: accountId },
-      data: {
-        accessToken: data.access_token,
-        tokenExpiresAt: expiresAt,
-        lastSyncedAt: new Date(),
-      },
-    });
-
-    return {
+  // Updates the database
+  await prisma.instaAccount.update({
+    where: { id: accountId },
+    data: {
       accessToken: data.access_token,
-      expiresAt,
-    };
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : ERROR_MESSAGES.AUTH.TOKEN_EXPIRED;
-    throw new Error(errorMessage);
-  }
+      tokenExpiresAt: expiresAt,
+      lastSyncedAt: new Date(),
+    },
+  });
+
+  return {
+    accessToken: data.access_token,
+    expiresAt,
+  };
 }
 
 /**

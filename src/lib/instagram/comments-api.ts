@@ -3,100 +3,40 @@
  * Handles comment replies via Instagram
  */
 
-import {
-  GRAPH_API,
-  ERROR_MESSAGES,
-  buildGraphApiUrl,
-} from "../../config/instagram.config";
-import { fetchWithTimeout } from "../utils/fetch-with-timeout";
+import { GRAPH_API, buildGraphApiUrl } from "../../config/instagram.config";
+import { fetchFromInstagram } from "./api/client";
 
 export interface ReplyToCommentOptions {
   commentId: string;
   message: string;
   accessToken: string;
-}
-
-export interface ReplyToCommentResult {
-  success: boolean;
-  replyId?: string;
-  error?: string;
+  instagramUserId?: string; // used for rate limiting keys
 }
 
 /**
  * Replies to a comment on Instagram
+ * Errors (Rate Limits, Spam, Invalid Tokens) will bubble up from fetchFromInstagram
+ * to be caught by the central worker processor.
  */
 export async function replyToComment(
   options: ReplyToCommentOptions,
-): Promise<ReplyToCommentResult> {
-  try {
-    const url = buildGraphApiUrl(
-      GRAPH_API.ENDPOINTS.REPLY_COMMENT(options.commentId),
-    );
+): Promise<{ replyId: string }> {
+  const url = buildGraphApiUrl(
+    GRAPH_API.ENDPOINTS.REPLY_COMMENT(options.commentId),
+  );
 
-    const result = await fetchWithTimeout<any>(url.toString(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: options.message,
-        access_token: options.accessToken,
-      }),
-      timeout: 20000, // 20 seconds for comment reply
-      retries: 2,
-    });
-
-    return {
-      success: true,
-      replyId: result.data.id,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : ERROR_MESSAGES.API.GENERIC_ERROR,
-    };
-  }
-}
-
-/**
- * Replies to a comment with retry logic
- */
-export async function replyToCommentWithRetry(
-  options: ReplyToCommentOptions,
-  maxRetries: number = 3,
-): Promise<ReplyToCommentResult> {
-  let lastError: string = "";
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const result = await replyToComment(options);
-
-    if (result.success) {
-      return result;
-    }
-
-    lastError = result.error || "Unknown error";
-
-    // Don't retry for certain errors
-    if (
-      lastError.includes("permission") ||
-      lastError.includes("not found") ||
-      lastError.includes("deleted")
-    ) {
-      return result;
-    }
-
-    // Waits before retrying (exponential backoff)
-    if (attempt < maxRetries) {
-      const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
+  const result = await fetchFromInstagram<any>(url.toString(), {
+    method: "POST",
+    body: {
+      message: options.message,
+      access_token: options.accessToken,
+    },
+    timeoutMs: 20000, // 20 seconds for comment reply
+    retries: 2,
+    instagramUserId: options.instagramUserId,
+  });
 
   return {
-    success: false,
-    error: `Failed after ${maxRetries} attempts: ${lastError}`,
+    replyId: result.id,
   };
 }

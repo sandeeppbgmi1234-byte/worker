@@ -4,13 +4,17 @@
  */
 
 import {
-  validateCommentData,
   findMatchingAutomations,
   isCommentProcessed,
 } from "../../automation/matcher";
 import { executeAutomation } from "../../automation/executor";
 import { getValidAccessToken } from "../token-manager";
 import { logger } from "../../utils/pino";
+import {
+  validateWebhookPayload,
+  validateCommentEvent,
+  validateStoryReplyEvent,
+} from "./validators/payload";
 
 export interface WebhookEntry {
   id: string;
@@ -26,6 +30,7 @@ export interface WebhookEntry {
     message?: {
       mid: string;
       text: string;
+      reply_to?: { story: { id: string } };
     };
   }>;
 }
@@ -36,357 +41,163 @@ export interface InstagramWebhookPayload {
 }
 
 /**
- * Processes a webhook event
+ * Processes a webhook event (Declarative Flow)
+ * Errors bubble up to be caught centrally by the worker
  */
 export async function processWebhookEvent(
-  payload: InstagramWebhookPayload,
+  rawPayload: InstagramWebhookPayload,
 ): Promise<void> {
-  const webhookId = payload.entry?.[0]?.id;
-  const entryCount = payload.entry?.length;
+  // Validate the payload shape
+  const entries = validateWebhookPayload(rawPayload);
+  if (entries.length === 0) return; // Ignore setup pings
 
-  // Logs only essential fields to avoid logging large payload objects
-  // and prevent issues with object references being mutated later
+  const webhookId = entries[0].id;
   logger.info(
-    {
-      object: payload.object,
-      webhookId,
-      entryCount,
-    },
-    "processWebhookEvent",
+    { object: rawPayload.object, webhookId, entryCount: entries.length },
+    "Processing webhook entries",
   );
 
-  try {
-    for (const entry of payload.entry) {
-      // Processes changes (comments, etc.)
-      if (entry.changes) {
-        for (const change of entry.changes) {
-          await processChange(entry.id, change);
-        }
-      }
-
-      // Processes messaging events (DMs)
-      if (entry.messaging) {
-        for (const messagingEvent of entry.messaging) {
-          await processMessagingEvent(entry.id, messagingEvent);
+  // Process each entry
+  for (const entry of entries) {
+    if (entry.changes) {
+      for (const change of entry.changes) {
+        if (change.field === "comments") {
+          await handleCommentEvent(entry.id, change.value, entry.time);
+        } else {
+          logger.warn({ field: change.field }, "Unknown webhook field");
         }
       }
     }
-  } catch (err) {
-    logger.error(
-      {
-        err: err instanceof Error ? err : new Error(String(err)),
-        webhookId,
-        object: payload.object,
-        entryCount,
-      },
-      "Critical error processing webhook event",
-    );
-    throw err; // Re-throws to be caught by webhook service
-  }
-}
 
-/**
- * Processes a change event (comment, etc.)
- */
-async function processChange(
-  instagramUserId: string,
-  change: { field: string; value: any },
-): Promise<void> {
-  const { field, value } = change;
-
-  // Processes different types of webhook changes
-  switch (field) {
-    case "comments":
-      await handleCommentEvent(instagramUserId, value);
-      break;
-    default:
-      logger.warn({ field }, "Unknown webhook field");
-  }
-}
-
-/**
- * Processes a messaging event (DM)
- */
-async function processMessagingEvent(
-  instagramUserId: string,
-  messagingEvent: any,
-): Promise<void> {
-  // Processes the message
-  if (messagingEvent.message) {
-    if (messagingEvent.message.reply_to?.story) {
-      await handleStoryReplyEvent(instagramUserId, messagingEvent);
-    } else {
-      // TODO: Implements message event handling
-      // await handleIncomingMessage(instagramUserId, messagingEvent);
+    if (entry.messaging) {
+      for (const messagingEvent of entry.messaging) {
+        if (messagingEvent.message?.reply_to?.story) {
+          await handleStoryReplyEvent(entry.id, messagingEvent);
+        }
+      }
     }
   }
 }
 
 async function handleStoryReplyEvent(
   instagramUserId: string,
-  messagingEvent: any,
+  rawMessagingEvent: any,
 ): Promise<void> {
-  try {
-    const senderId = messagingEvent.sender.id;
-    const storyId = messagingEvent.message.reply_to.story.id;
-    const text = messagingEvent.message.text;
-    const messageId = messagingEvent.message.mid;
+  // Validate
+  const event = validateStoryReplyEvent(rawMessagingEvent);
 
-    if (!text || !storyId) {
-      return;
-    }
+  // Fetch Account
+  const { findInstaAccountByInstagramUserId } =
+    await import("../../../server/repositories/insta-account.repository");
+  const dbAccount = await findInstaAccountByInstagramUserId(instagramUserId);
+  if (!dbAccount || !dbAccount.isActive) return;
 
-    // Resolves access token and account
-    const { findInstaAccountByInstagramUserId } =
-      await import("../../../server/repositories/insta-account.repository");
+  // Fetch Automations
+  const { findActiveAutomationsByStory } =
+    await import("../../../server/repositories/automation.repository");
+  const automations = await findActiveAutomationsByStory(
+    dbAccount.userId,
+    event.storyId,
+  );
+  if (automations.length === 0) return;
 
-    const dbAccount = await findInstaAccountByInstagramUserId(
-      String(instagramUserId),
+  // Match
+  // Map to CommentData format to reuse the matching logic natively
+  const commentDataForMatcher = {
+    id: event.messageId,
+    text: event.text,
+    username: "user",
+    userId: event.senderId,
+    timestamp: event.timestamp,
+  };
+  const matches = await findMatchingAutomations(
+    commentDataForMatcher,
+    automations,
+  );
+  if (matches.length === 0) return;
+
+  // Check idempotency and execute
+  const accessToken = await getValidAccessToken(dbAccount.id);
+
+  for (const match of matches) {
+    const isProcessed = await isCommentProcessed(
+      event.messageId,
+      match.automation.id,
     );
-
-    if (!dbAccount || !dbAccount.isActive) {
-      return;
-    }
-
-    const instaAccount = {
-      id: dbAccount.id,
-      userId: dbAccount.userId,
-    };
-
-    // Fetches active automations directly from DB
-    const { findActiveAutomationsByStory } =
-      await import("../../../server/repositories/automation.repository");
-
-    const automations = await findActiveAutomationsByStory(
-      instaAccount.userId,
-      storyId,
-    );
-
-    if (automations.length === 0) {
-      return;
-    }
-
-    // Map to CommentData format to reuse logic
-    const commentData = {
-      id: messageId,
-      text: text,
-      username: "user", // Story replies don't have username payload usually
-      userId: senderId,
-      timestamp: String(messagingEvent.timestamp),
-    };
-
-    const matches = await findMatchingAutomations(commentData, automations);
-    if (matches.length === 0) {
-      return;
-    }
-
-    let accessToken: string;
-    try {
-      accessToken = await getValidAccessToken(instaAccount.id);
-    } catch (err) {
-      logger.error(
-        { instagramUserId, storyId },
-        "Failed to get token for story reply",
+    if (isProcessed) {
+      logger.debug(
+        { messageId: event.messageId, automationId: match.automation.id },
+        "Story reply already processed",
       );
-      return;
+      continue;
     }
 
-    // Executes automations (idempotent)
-    const processedChecks = await Promise.all(
-      matches.map((match) =>
-        isCommentProcessed(commentData.id, match.automation.id).then(
-          (processed) => ({ match, processed }),
-        ),
-      ),
+    // TODO: FIXME (User-Level Idempotency)
+    // Add check here: Has this user (event.senderId) already triggered this specific automation (match.automation.id)?
+    // If yes, silently skip execution to prevent trigger spamming.
+
+    await executeAutomation(
+      match.automation.id,
+      commentDataForMatcher,
+      accessToken,
     );
-
-    const unprocessedMatches = processedChecks.filter(
-      ({ processed }) => !processed,
+    logger.info(
+      { messageId: event.messageId, automationId: match.automation.id },
+      "Story reply automation executed",
     );
-
-    if (unprocessedMatches.length === 0) {
-      return;
-    }
-
-    const executionResults = await Promise.allSettled(
-      unprocessedMatches.map(({ match }) =>
-        executeAutomation(match.automation.id, commentData, accessToken),
-      ),
-    );
-
-    executionResults.forEach((result, index) => {
-      const { match } = unprocessedMatches[index];
-      if (result.status === "fulfilled" && result.value.success) {
-        logger.info(
-          {
-            messageId: commentData.id,
-            automationId: match.automation.id,
-          },
-          "Story reply automation executed successfully",
-        );
-      } else {
-        logger.error(
-          {
-            messageId: commentData.id,
-            automationId: match.automation.id,
-          },
-          "Failed to execute story reply automation",
-        );
-      }
-    });
-  } catch (err) {
-    logger.error(err, "Error processing story reply");
   }
 }
 
-/**
- * Handles a comment event
- */
 async function handleCommentEvent(
   instagramUserId: string,
-  commentData: any,
+  rawCommentData: any,
+  fallbackTimestamp: number,
 ): Promise<void> {
-  try {
-    // Validates comment
-    const comment = validateCommentData(commentData);
-    if (!comment) {
-      logger.warn(
-        {
-          instagramUserId,
-          commentData: JSON.stringify(commentData).slice(0, 200),
-        },
-        "Invalid comment data in webhook",
+  // Validate
+  const event = validateCommentEvent(rawCommentData, fallbackTimestamp);
+
+  // Fetch Account
+  const { findInstaAccountByInstagramUserId } =
+    await import("../../../server/repositories/insta-account.repository");
+  const dbAccount = await findInstaAccountByInstagramUserId(instagramUserId);
+  if (!dbAccount || !dbAccount.isActive) return;
+
+  // Fetch Automations
+  const { findActiveAutomationsByPost } =
+    await import("../../../server/repositories/automation.repository");
+  const automations = await findActiveAutomationsByPost(
+    dbAccount.userId,
+    event.mediaId,
+  );
+  if (automations.length === 0) return;
+
+  // Match
+  const matches = await findMatchingAutomations(event as any, automations);
+  if (matches.length === 0) return;
+
+  // Check idempotency and execute
+  for (const match of matches) {
+    const isProcessed = await isCommentProcessed(event.id, match.automation.id);
+    if (isProcessed) {
+      logger.debug(
+        { commentId: event.id, automationId: match.automation.id },
+        "Comment already processed",
       );
-      return;
+      continue;
     }
 
-    // Extracts postId
-    const postId = commentData.media?.id || commentData.media_id;
-    if (!postId) {
-      logger.warn(
-        {
-          instagramUserId,
-          commentId: comment.id,
-        },
-        "Missing postId in comment event",
-      );
-      return;
-    }
+    // TODO: FIXME (User-Level Idempotency)
+    // Add check here: Has this user (event.userId) already triggered this specific automation (match.automation.id)?
+    // If yes, silently skip execution to prevent trigger spamming.
 
-    // Account gating (Direct DB)
-    const { findInstaAccountByInstagramUserId } =
-      await import("../../../server/repositories/insta-account.repository");
-
-    const dbAccount = await findInstaAccountByInstagramUserId(
-      String(instagramUserId),
+    await executeAutomation(
+      match.automation.id,
+      event as any,
+      dbAccount.accessToken,
     );
-
-    if (!dbAccount || !dbAccount.isActive) {
-      return;
-    }
-
-    const instaAccount = {
-      id: dbAccount.id,
-      userId: dbAccount.userId,
-      clerkId: dbAccount.user?.clerkId || "",
-    };
-
-    // Fetches active automations directly from DB
-    const { findActiveAutomationsByPost } =
-      await import("../../../server/repositories/automation.repository");
-
-    const automations = await findActiveAutomationsByPost(
-      instaAccount.userId,
-      postId,
+    logger.info(
+      { commentId: event.id, automationId: match.automation.id },
+      "Post comment automation executed",
     );
-
-    if (automations.length === 0) {
-      return;
-    }
-
-    // Matches automations
-
-    const matches = await findMatchingAutomations(comment, automations);
-    if (matches.length === 0) {
-      return;
-    }
-
-    // Executes automations (idempotent)
-    // Checks all automations in parallel to filter out already-processed ones
-    const processedChecks = await Promise.all(
-      matches.map((match) =>
-        isCommentProcessed(comment.id, match.automation.id).then(
-          (processed) => ({ match, processed }),
-        ),
-      ),
-    );
-
-    // Filters out already-processed automations
-    const unprocessedMatches = processedChecks.filter(
-      ({ processed }) => !processed,
-    );
-
-    // Logs skipped automations
-    processedChecks
-      .filter(({ processed }) => processed)
-      .forEach(({ match }) => {
-        logger.debug(
-          {
-            commentId: comment.id,
-            automationId: match.automation.id,
-          },
-          "Comment already processed",
-        );
-      });
-
-    if (unprocessedMatches.length === 0) {
-      return;
-    }
-
-    // Executes remaining automations in parallel
-    const executionResults = await Promise.allSettled(
-      unprocessedMatches.map(({ match }) =>
-        executeAutomation(match.automation.id, comment, dbAccount.accessToken),
-      ),
-    );
-
-    // Logs results
-    executionResults.forEach((result, index) => {
-      const { match } = unprocessedMatches[index];
-
-      if (result.status === "fulfilled") {
-        logger.info(
-          {
-            commentId: comment.id,
-            automationId: match.automation.id,
-            actionType: match.automation.actionType,
-          },
-          "Automation executed successfully",
-        );
-      } else {
-        logger.error(
-          {
-            commentId: comment.id,
-            automationId: match.automation.id,
-            actionType: match.automation.actionType,
-          },
-          "Failed to execute automation for comment",
-          result.reason instanceof Error
-            ? result.reason
-            : new Error(String(result.reason)),
-        );
-      }
-    });
-  } catch (error) {
-    logger.error(
-      {
-        instagramUserId,
-        commentId: commentData?.id,
-        postId: commentData?.media?.id || commentData?.media_id,
-      },
-      "Error handling comment event",
-      error instanceof Error ? error : new Error(String(error)),
-    );
-    throw error;
   }
 }

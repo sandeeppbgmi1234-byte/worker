@@ -31,6 +31,13 @@ export const RATE_LIMITS = {
   REQUEST_TIMEOUT_MS: 10000, // 10 seconds
 } as const;
 
+// Meta Graph API Usage Thresholds
+// We stop processing if the percentage exceeds the STOP threshold.
+export const RATE_LIMIT_THRESHOLDS = {
+  APP_USAGE_STOP_PERCENT: 85,
+  ACCOUNT_USAGE_STOP_PERCENT: 90,
+} as const;
+
 /**
  * Builds a complete Graph API URL with version and endpoint
  */

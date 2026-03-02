@@ -4,14 +4,9 @@
  */
 
 import { CommentData, replaceVariables } from "./matcher";
-import { sendDirectMessageWithRetry } from "../instagram/messaging-api";
-import { replyToCommentWithRetry } from "../instagram/comments-api";
-import {
-  isRateLimited,
-  incrementRateLimit,
-  createMessagingRateLimitKey,
-  createCommentsRateLimitKey,
-} from "../instagram/rate-limiter";
+import { sendDirectMessage } from "../instagram/messaging-api";
+import { replyToComment } from "../instagram/comments-api";
+import { checkRateLimits } from "../instagram/rate-limiting/redis-limiter";
 import { logger } from "../utils/pino";
 import { findAutomationById } from "../../server/repositories/automation.repository";
 import { findInstaAccountByAutomationId } from "../../server/repositories/insta-account.repository";
@@ -65,109 +60,66 @@ export async function executeAutomation(
     // Executes based on action type
     try {
       if (automation.actionType === "COMMENT_REPLY") {
-        // Checks rate limit
-        const rateLimitKey = createCommentsRateLimitKey(
-          instaAccount.instagramUserId,
-        );
-        if (isRateLimited(rateLimitKey)) {
-          throw new Error("Rate limit exceeded for comment replies");
-        }
+        // Checks API-driven Rate Limits via Redis before firing
+        await checkRateLimits(instaAccount.instagramUserId);
 
-        // Replies to comment with retry
-        const result = await replyToCommentWithRetry({
+        const result = await replyToComment({
           commentId: comment.id,
           message: finalMessage,
           accessToken,
+          instagramUserId: instaAccount.instagramUserId,
         });
-
-        if (!result.success) {
-          throw new Error(result.error);
-        }
 
         instagramMessageId = result.replyId || null;
         executionStatus = "SUCCESS";
-        incrementRateLimit(rateLimitKey);
       } else if (automation.actionType === "DM") {
-        // Checks rate limit
-        const rateLimitKey = createMessagingRateLimitKey(
-          instaAccount.instagramUserId,
-        );
-        if (isRateLimited(rateLimitKey)) {
-          throw new Error("Rate limit exceeded for direct messages");
-        }
+        // Checks API-driven Rate Limits via Redis before firing
+        await checkRateLimits(instaAccount.instagramUserId);
 
-        // Sends DM with retry
+        // Sends DM
         // Note: If user hasn't messaged before, DM will go to their "Message Requests" folder
         // We use the commentId to reply privately to the comment which bypasses the 24h window for the first message
-        const result = await sendDirectMessageWithRetry({
+        const result = await sendDirectMessage({
           recipientId: comment.userId,
           // Only pass commentId if it's a comment reply; story replies execute as standard DMs.
           commentId:
             automation.triggerType === "STORY_REPLY" ? undefined : comment.id,
           message: finalMessage,
           accessToken,
+          instagramUserId: instaAccount.instagramUserId,
         });
-
-        if (!result.success) {
-          throw new Error(result.error);
-        }
 
         instagramMessageId = result.messageId || null;
         executionStatus = "SUCCESS";
-        incrementRateLimit(rateLimitKey);
 
         // Replies to the comment after successfully sending DM if configured
         if (automation.commentReplyWhenDm) {
           try {
-            const commentReplyRateLimitKey = createCommentsRateLimitKey(
-              instaAccount.instagramUserId,
-            );
+            await checkRateLimits(instaAccount.instagramUserId);
 
-            // Checks rate limit for comment replies
-            if (!isRateLimited(commentReplyRateLimitKey)) {
-              // Prepares the comment reply message with variable replacement
-              let commentReplyMessage = automation.commentReplyWhenDm;
-              if (automation.useVariables) {
-                commentReplyMessage = replaceVariables(
-                  commentReplyMessage,
-                  comment,
-                );
-              }
-
-              const commentReplyResult = await replyToCommentWithRetry({
-                commentId: comment.id,
-                message: commentReplyMessage,
-                accessToken,
-              });
-
-              if (commentReplyResult.success) {
-                incrementRateLimit(commentReplyRateLimitKey);
-                logger.info(
-                  {
-                    commentId: comment.id,
-                    automationId,
-                  },
-                  "Comment reply sent after DM",
-                );
-              } else {
-                logger.warn(
-                  {
-                    commentId: comment.id,
-                    automationId,
-                    error: commentReplyResult.error,
-                  },
-                  "Failed to reply to comment after DM",
-                );
-              }
-            } else {
-              logger.warn(
-                {
-                  commentId: comment.id,
-                  automationId,
-                },
-                "Rate limited for comment reply after DM",
+            // Prepares the comment reply message with variable replacement
+            let commentReplyMessage = automation.commentReplyWhenDm;
+            if (automation.useVariables) {
+              commentReplyMessage = replaceVariables(
+                commentReplyMessage,
+                comment,
               );
             }
+
+            await replyToComment({
+              commentId: comment.id,
+              message: commentReplyMessage,
+              accessToken,
+              instagramUserId: instaAccount.instagramUserId,
+            });
+
+            logger.info(
+              {
+                commentId: comment.id,
+                automationId,
+              },
+              "Comment reply sent after DM",
+            );
           } catch (commentReplyError) {
             // Logs error but doesn't fail the automation execution
             logger.error(

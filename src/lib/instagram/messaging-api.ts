@@ -9,7 +9,7 @@ import {
   buildGraphApiUrl,
   GRAPH_API,
 } from "../../config/instagram.config";
-import { fetchWithTimeout } from "../utils/fetch-with-timeout";
+import { fetchFromInstagram } from "./api/client";
 
 export interface SendMessageOptions {
   recipientId: string;
@@ -18,127 +18,47 @@ export interface SendMessageOptions {
   accessToken: string;
   messagingType?: "RESPONSE" | "UPDATE" | "MESSAGE_TAG";
   tag?: string;
-}
-
-export interface SendMessageResult {
-  success: boolean;
-  messageId?: string;
-  error?: string;
+  instagramUserId?: string; // used for rate limiting keys
 }
 
 /**
  * Sends a direct message on Instagram
+ * Errors (Rate Limits, Spam, Invalid Tokens) will bubble up from fetchFromInstagram
+ * to be caught by the central worker processor.
  */
 export async function sendDirectMessage(
   options: SendMessageOptions,
-): Promise<SendMessageResult> {
-  try {
-    // Validates message length
-    if (options.message.length > MESSAGING_CONSTRAINTS.MESSAGE_MAX_LENGTH) {
-      return {
-        success: false,
-        error: ERROR_MESSAGES.MESSAGING.MESSAGE_TOO_LONG,
-      };
-    }
-
-    const url = buildGraphApiUrl("me/messages");
-
-    const requestBody: any = {
-      recipient: options.commentId
-        ? { comment_id: options.commentId }
-        : { id: options.recipientId },
-      message: { text: options.message },
-      messaging_type: options.messagingType || "RESPONSE",
-      access_token: options.accessToken,
-    };
-
-    // Adds tag if using MESSAGE_TAG
-    if (options.messagingType === "MESSAGE_TAG" && options.tag) {
-      requestBody.tag = options.tag;
-    }
-    // Converts URL object to string for fetch compatibility
-    try {
-      const result = await fetchWithTimeout<any>(url.toString(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-        timeout: 20000, // 20 seconds for message sending
-        retries: 2,
-      });
-
-      return {
-        success: true,
-        messageId: result.data.message_id,
-      };
-    } catch (error) {
-      // Handles timeout and other errors
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : ERROR_MESSAGES.API.GENERIC_ERROR;
-
-      // Checks for 24-hour window error in error message
-      if (errorMessage.includes("window") || errorMessage.includes("24-hour")) {
-        return {
-          success: false,
-          error: ERROR_MESSAGES.MESSAGING.WINDOW_EXPIRED,
-        };
-      }
-
-      return {
-        success: false,
-        error: errorMessage,
-      };
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : ERROR_MESSAGES.API.GENERIC_ERROR,
-    };
+): Promise<{ messageId: string }> {
+  // Validates message length
+  if (options.message.length > MESSAGING_CONSTRAINTS.MESSAGE_MAX_LENGTH) {
+    throw new Error(ERROR_MESSAGES.MESSAGING.MESSAGE_TOO_LONG);
   }
-}
 
-/**
- * Sends a message with retry logic
- */
-export async function sendDirectMessageWithRetry(
-  options: SendMessageOptions,
-  maxRetries: number = 3,
-): Promise<SendMessageResult> {
-  let lastError: string = "";
+  const url = buildGraphApiUrl("me/messages");
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const result = await sendDirectMessage(options);
+  const requestBody: any = {
+    recipient: options.commentId
+      ? { comment_id: options.commentId }
+      : { id: options.recipientId },
+    message: { text: options.message },
+    messaging_type: options.messagingType || "RESPONSE",
+    access_token: options.accessToken,
+  };
 
-    if (result.success) {
-      return result;
-    }
-
-    lastError = result.error || "Unknown error";
-
-    // Don't retry for certain errors
-    if (
-      lastError.includes("24-hour") ||
-      lastError.includes("window") ||
-      lastError.includes("permission")
-    ) {
-      return result;
-    }
-
-    // Waits before retrying (exponential backoff)
-    if (attempt < maxRetries) {
-      const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
+  // Adds tag if using MESSAGE_TAG
+  if (options.messagingType === "MESSAGE_TAG" && options.tag) {
+    requestBody.tag = options.tag;
   }
+
+  const result = await fetchFromInstagram<any>(url.toString(), {
+    method: "POST",
+    body: requestBody,
+    timeoutMs: 20000, // 20 seconds for message sending
+    retries: 2,
+    instagramUserId: options.instagramUserId,
+  });
 
   return {
-    success: false,
-    error: `Failed after ${maxRetries} attempts: ${lastError}`,
+    messageId: result.message_id,
   };
 }

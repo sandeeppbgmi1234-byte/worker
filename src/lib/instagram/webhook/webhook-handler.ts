@@ -5,16 +5,22 @@
 
 import {
   findMatchingAutomations,
-  isCommentProcessed,
+  // isCommentProcessed,
 } from "../../automation/matcher";
 import { executeAutomation } from "../../automation/executor";
-import { getValidAccessToken } from "../token-manager";
-import { logger } from "../../utils/pino";
+// import { getValidAccessToken } from "../token-manager";
 import {
   validateWebhookPayload,
   validateCommentEvent,
   validateStoryReplyEvent,
 } from "./validators/payload";
+import { logger } from "../../utils/pino";
+import {
+  isUserConnected,
+  isCommentProcessed,
+  isUserOnCooldown,
+  getAccessToken,
+} from "../../redis";
 
 export interface WebhookEntry {
   id: string;
@@ -54,7 +60,7 @@ export async function processWebhookEvent(
   const webhookId = entries[0].id;
   logger.info(
     { object: rawPayload.object, webhookId, entryCount: entries.length },
-    "Processing webhook entries",
+    "[Webhook Entry] Received payload from Meta",
   );
 
   // Process each entry
@@ -62,9 +68,16 @@ export async function processWebhookEvent(
     if (entry.changes) {
       for (const change of entry.changes) {
         if (change.field === "comments") {
+          logger.info(
+            { webhookId, field: change.field },
+            "[Webhook Event] Routing to handleCommentEvent",
+          );
           await handleCommentEvent(entry.id, change.value, entry.time);
         } else {
-          logger.warn({ field: change.field }, "Unknown webhook field");
+          logger.warn(
+            { webhookId, field: change.field },
+            "[Webhook Event] Ignored unknown change field",
+          );
         }
       }
     }
@@ -72,6 +85,10 @@ export async function processWebhookEvent(
     if (entry.messaging) {
       for (const messagingEvent of entry.messaging) {
         if (messagingEvent.message?.reply_to?.story) {
+          logger.info(
+            { webhookId, senderId: messagingEvent.sender.id },
+            "[Webhook Event] Routing to handleStoryReplyEvent",
+          );
           await handleStoryReplyEvent(entry.id, messagingEvent);
         }
       }
@@ -86,20 +103,61 @@ async function handleStoryReplyEvent(
   // Validate
   const event = validateStoryReplyEvent(rawMessagingEvent);
 
-  // Fetch Account
+  // Fast fail via Redis User Connection Check (Fallback to DB)
+  const isConnected = await isUserConnected(instagramUserId, async () => {
+    const { findInstaAccountByInstagramUserId } =
+      await import("../../../server/repositories/insta-account.repository");
+    logger.info(
+      { instagramUserId },
+      "[DB Fetch] Fetching InstaAccount for Connection Check",
+    );
+    const account = await findInstaAccountByInstagramUserId(instagramUserId);
+    return account ? account.isActive : false;
+  });
+
+  if (!isConnected) {
+    logger.info(
+      { instagramUserId },
+      "[StoryReply] User not connected. Aborting.",
+    );
+    return;
+  }
+
+  logger.info(
+    { instagramUserId },
+    "[StoryReply] User connected. Fetching DB Account.",
+  );
+
+  // Since we know the account is active, fetch DB account fields conditionally here
   const { findInstaAccountByInstagramUserId } =
     await import("../../../server/repositories/insta-account.repository");
+  logger.info({ instagramUserId }, "[DB Fetch] Fetching internal DB Account");
   const dbAccount = await findInstaAccountByInstagramUserId(instagramUserId);
-  if (!dbAccount || !dbAccount.isActive) return;
+  if (!dbAccount) return;
 
   // Fetch Automations
   const { findActiveAutomationsByStory } =
     await import("../../../server/repositories/automation.repository");
+  logger.info(
+    { userId: dbAccount.userId, storyId: event.storyId },
+    "[DB Fetch] Fetching Automations for Story",
+  );
   const automations = await findActiveAutomationsByStory(
     dbAccount.userId,
     event.storyId,
   );
-  if (automations.length === 0) return;
+  if (automations.length === 0) {
+    logger.info(
+      { instagramUserId, storyId: event.storyId },
+      "[StoryReply] No automations found for story. Aborting.",
+    );
+    return;
+  }
+
+  logger.info(
+    { instagramUserId, automationCount: automations.length },
+    "[StoryReply] Found automations. Matching rules...",
+  );
 
   // Match
   // Map to CommentData format to reuse the matching logic natively
@@ -114,36 +172,69 @@ async function handleStoryReplyEvent(
     commentDataForMatcher,
     automations,
   );
-  if (matches.length === 0) return;
+  if (matches.length === 0) {
+    logger.info(
+      { instagramUserId, text: event.text },
+      "[StoryReply] No matching rules triggered. Aborting.",
+    );
+    return;
+  }
 
-  // Check idempotency and execute
-  const accessToken = await getValidAccessToken(dbAccount.id);
+  logger.info(
+    { instagramUserId, matchCount: matches.length },
+    "[StoryReply] Rules matched. Fetching Token...",
+  );
+
+  // Use Redis to get Access Token
+  const accessToken = await getAccessToken(dbAccount.id, async () => {
+    const { getValidAccessToken } = await import("../token-manager");
+    logger.info(
+      { accountId: dbAccount.id },
+      "[DB Fetch] Fetching Access Token from DB Native Manager",
+    );
+    return getValidAccessToken(dbAccount.id);
+  });
 
   for (const match of matches) {
-    const isProcessed = await isCommentProcessed(
+    // 1. Atomic Idempotency Check in Redis
+    const alreadyProcessed = await isCommentProcessed(
       event.messageId,
       match.automation.id,
     );
-    if (isProcessed) {
-      logger.debug(
+    if (alreadyProcessed) {
+      logger.info(
         { messageId: event.messageId, automationId: match.automation.id },
-        "Story reply already processed",
+        "[StoryReply] Idempotency lock hit. Skipping duplicate.",
       );
       continue;
     }
 
-    // TODO: FIXME (User-Level Idempotency)
-    // Add check here: Has this user (event.senderId) already triggered this specific automation (match.automation.id)?
-    // If yes, silently skip execution to prevent trigger spamming.
+    // 2. Atomic Cooldown Check in Redis
+    const onCooldown = await isUserOnCooldown(
+      event.senderId,
+      match.automation.id,
+    );
+    if (onCooldown) {
+      logger.info(
+        { userId: event.senderId, automationId: match.automation.id },
+        "Story reply skipped due to cooldown limit",
+      );
+      continue;
+    }
 
     await executeAutomation(
-      match.automation.id,
+      match.automation,
       commentDataForMatcher,
       accessToken,
+      instagramUserId,
     );
     logger.info(
-      { messageId: event.messageId, automationId: match.automation.id },
-      "Story reply automation executed",
+      {
+        messageId: event.messageId,
+        automationId: match.automation.id,
+        success: true,
+      },
+      "[StoryReply] Automation execution completed successfully.",
     );
   }
 }
@@ -153,51 +244,134 @@ async function handleCommentEvent(
   rawCommentData: any,
   fallbackTimestamp: number,
 ): Promise<void> {
-  // Validate
+  // Validattion
   const event = validateCommentEvent(rawCommentData, fallbackTimestamp);
 
-  // Fetch Account
-  const { findInstaAccountByInstagramUserId } =
-    await import("../../../server/repositories/insta-account.repository");
-  const dbAccount = await findInstaAccountByInstagramUserId(instagramUserId);
-  if (!dbAccount || !dbAccount.isActive) return;
+  // Fast fail via Redis User Connection Check (Fallback to DB)
+  const isConnected = await isUserConnected(instagramUserId, async () => {
+    const { findInstaAccountByInstagramUserId } =
+      await import("../../../server/repositories/insta-account.repository");
+    logger.info(
+      { instagramUserId },
+      "[DB Fetch] Fetching InstaAccount for Connection Check",
+    );
+    const account = await findInstaAccountByInstagramUserId(instagramUserId);
+    return account ? account.isActive : false;
+  });
+
+  if (!isConnected) {
+    logger.info(
+      { instagramUserId },
+      "[CommentReply] User not connected. Aborting.",
+    );
+    return;
+  }
+
+  logger.info(
+    { instagramUserId },
+    "[CommentReply] User connected. Fetching DB Account.",
+  );
+
+  // Retrieve full internal account data
+  const { getAccountByInstagramId, getAutomationsByPost } =
+    await import("../../redis");
+
+  const dbAccount = await getAccountByInstagramId(instagramUserId, async () => {
+    const { findInstaAccountByInstagramUserId } =
+      await import("../../../server/repositories/insta-account.repository");
+    logger.info(
+      { instagramUserId },
+      "[DB Fetch] Fetching internal DB Account natively",
+    );
+    return findInstaAccountByInstagramUserId(instagramUserId);
+  });
+  if (!dbAccount) return;
 
   // Fetch Automations
-  const { findActiveAutomationsByPost } =
-    await import("../../../server/repositories/automation.repository");
-  const automations = await findActiveAutomationsByPost(
+  const automations = await getAutomationsByPost(
     dbAccount.userId,
     event.mediaId,
+    async () => {
+      const { findActiveAutomationsByPost } =
+        await import("../../../server/repositories/automation.repository");
+      logger.info(
+        { userId: dbAccount.userId, mediaId: event.mediaId },
+        "[DB Fetch] Fetching Automations for Post natively",
+      );
+      return findActiveAutomationsByPost(dbAccount.userId, event.mediaId);
+    },
   );
-  if (automations.length === 0) return;
+  if (automations.length === 0) {
+    logger.info(
+      { instagramUserId, mediaId: event.mediaId },
+      "[CommentReply] No automations found for post. Aborting.",
+    );
+    return;
+  }
+
+  logger.info(
+    { instagramUserId, automationCount: automations.length },
+    "[CommentReply] Found automations. Matching rules...",
+  );
 
   // Match
   const matches = await findMatchingAutomations(event as any, automations);
-  if (matches.length === 0) return;
+  if (matches.length === 0) {
+    logger.debug(
+      { instagramUserId, text: event.text },
+      "[CommentReply] No matching rules triggered. Aborting.",
+    );
+    return;
+  }
+
+  logger.debug(
+    { instagramUserId, matchCount: matches.length },
+    "[CommentReply] Rules matched. Fetching Token...",
+  );
+
+  // Use Redis to get Access Token
+  const accessToken = await getAccessToken(dbAccount.id, async () => {
+    const { getValidAccessToken } = await import("../token-manager");
+    return getValidAccessToken(dbAccount.id);
+  });
 
   // Check idempotency and execute
   for (const match of matches) {
-    const isProcessed = await isCommentProcessed(event.id, match.automation.id);
-    if (isProcessed) {
+    // 1. Atomic Idempotency Check in Redis
+    const alreadyProcessed = await isCommentProcessed(
+      event.id,
+      match.automation.id,
+    );
+    if (alreadyProcessed) {
       logger.debug(
         { commentId: event.id, automationId: match.automation.id },
-        "Comment already processed",
+        "[CommentReply] Idempotency lock hit. Skipping duplicate.",
       );
       continue;
     }
 
-    // TODO: FIXME (User-Level Idempotency)
-    // Add check here: Has this user (event.userId) already triggered this specific automation (match.automation.id)?
-    // If yes, silently skip execution to prevent trigger spamming.
+    // 2. Atomic Cooldown Check in Redis
+    const onCooldown = await isUserOnCooldown(
+      event.userId,
+      match.automation.id,
+    );
+    if (onCooldown) {
+      logger.info(
+        { userId: event.userId, automationId: match.automation.id },
+        "Comment reply skipped due to cooldown limit",
+      );
+      continue;
+    }
 
     await executeAutomation(
-      match.automation.id,
+      match.automation,
       event as any,
-      dbAccount.accessToken,
+      accessToken,
+      instagramUserId,
     );
     logger.info(
-      { commentId: event.id, automationId: match.automation.id },
-      "Post comment automation executed",
+      { commentId: event.id, automationId: match.automation.id, success: true },
+      "[CommentReply] Automation execution completed successfully.",
     );
   }
 }

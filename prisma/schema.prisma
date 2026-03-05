@@ -47,12 +47,29 @@ model InstaAccount {
   // facebookPageName String?
 
   // Connection metadata
-  connectedAt     DateTime @default(now())
-  lastSyncedAt    DateTime @default(now())
-  webhooksEnabled Boolean  @default(false)
-  isActive        Boolean  @default(true)
+  connectedAt            DateTime                @default(now())
+  lastSyncedAt           DateTime                @default(now())
+  webhooksEnabled        Boolean                 @default(false)
+  isActive               Boolean                 @default(true)
+  instaFollowerSnapshots InstaFollowerSnapshot[]
 
   @@map("instagram_accounts")
+}
+
+model InstaFollowerSnapshot {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  instaAccountId String       @db.ObjectId
+  instaAccount   InstaAccount @relation(fields: [instaAccountId], references: [id], onDelete: Cascade)
+
+  followersCount Int
+  date           DateTime // Stored in UTC, truncated to start of day (00:00:00)
+
+  createdAt DateTime @default(now())
+
+  // Ensure we only have 1 snapshot per account per day
+  @@unique([instaAccountId, date])
+  @@index([instaAccountId, date(sort: Desc)])
+  @@map("insta_follower_snapshots")
 }
 
 // Embedded document for post-based automations
@@ -126,8 +143,8 @@ model AutomationExecution {
 
   executedAt DateTime @default(now())
 
+  @@unique([commentId, automationId])
   @@index([automationId, status])
-  @@index([commentId, automationId])
   @@map("automation_executions")
 }
 

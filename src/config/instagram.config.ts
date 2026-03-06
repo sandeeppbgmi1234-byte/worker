@@ -21,6 +21,7 @@ export const GRAPH_API = {
 export const MESSAGING_CONSTRAINTS = {
   WINDOW_HOURS: 24,
   RATE_LIMIT_PER_HOUR: 100,
+  BURST_LIMIT_PER_HOUR: 200, // Local protective safety buffer
   MESSAGE_MAX_LENGTH: 1000,
 } as const;
 
@@ -36,6 +37,14 @@ export const RATE_LIMITS = {
 export const RATE_LIMIT_THRESHOLDS = {
   APP_USAGE_STOP_PERCENT: 85,
   ACCOUNT_USAGE_STOP_PERCENT: 90,
+} as const;
+
+// Quick Replie Configuration (Bypass Media Restriction)
+export const QUICK_REPLIES = {
+  BYPASS: {
+    TITLE: "Tap to see media 📸",
+    PAYLOAD_PREFIX: "SEND_IMAGE_FOR_AUTOMATION:",
+  },
 } as const;
 
 /**

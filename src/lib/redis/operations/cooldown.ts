@@ -39,7 +39,7 @@ export async function isUserOnCooldown(
   //       ? customTtlSeconds
   //       : TTL.DEFAULT_COOLDOWN;
 
-  //   // SET NX locks the key atomically
+  //   // SET NX atomically acquires lock — returns null if key already exists
   //   const result = await redis.set(key, "1", "EX", ttl, "NX");
 
   //   const isAlreadyOnCooldown = result === null;

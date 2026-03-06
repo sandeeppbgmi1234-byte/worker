@@ -1,14 +1,20 @@
 /**
  * Automation Executor
- * Executes automation actions (DM or comment reply)
+ * State-machine pipeline: Public Reply → Ask to Follow Gate → DM (Image → Text)
+ * Each branch is independently guarded so retries never re-execute completed steps.
  */
 
 import { CommentData, replaceVariables } from "./matcher";
 import { sendDirectMessage } from "../instagram/messaging-api";
 import { replyToComment } from "../instagram/comments-api";
-import { checkRateLimits } from "../instagram/rate-limiting/redis-limiter";
+import { checkIfUserFollows } from "../instagram/follower-api";
+import {
+  checkRateLimits,
+  incrementApiUsage,
+} from "../instagram/rate-limiting/redis-limiter";
 import { logger } from "../utils/pino";
 import { Automation } from "@prisma/client";
+import { QUICK_REPLIES } from "../../config/instagram.config";
 
 export interface ExecutionResult {
   success: boolean;
@@ -16,8 +22,13 @@ export interface ExecutionResult {
   error?: string;
 }
 
+// Possible outcomes for the execution status stored in DB
+type ExecutionStatus = "SUCCESS" | "FAILED" | "ASK_TO_FOLLOW_SENT";
+
 /**
- * Executes an automation action
+ * Executes the full automation pipeline for a matched comment.
+ * Steps run in order: Public Reply → Follow Check (gate) → DM
+ * Any step can exit early without affecting what already ran.
  */
 export async function executeAutomation(
   automation: Automation,
@@ -27,7 +38,7 @@ export async function executeAutomation(
 ): Promise<ExecutionResult> {
   const automationId = automation.id;
 
-  // Prepares the message
+  // Prepare DM message with optional variable substitution (e.g., @username)
   let finalMessage = automation.replyMessage;
   if (automation.useVariables) {
     finalMessage = replaceVariables(finalMessage, comment);
@@ -39,16 +50,62 @@ export async function executeAutomation(
       actionType: automation.actionType,
       triggerType: automation.triggerType,
     },
-    "[Executor] Beginning execution flow",
+    "[Executor] Beginning execution pipeline",
   );
 
   let instagramMessageId: string | null = null;
-  let executionStatus: "SUCCESS" | "FAILED" = "FAILED"; // Defaults to failed if we throw before success
+  let executionStatus: ExecutionStatus = "FAILED";
   let errorMessage: string | null = null;
+  // Tracks which steps succeeded to guide safe retries and DB logging
+  let sentMessage = finalMessage;
 
   try {
+    // ─── STEP 1: Public Reply ──────────────────────────────────────────────────
+    // Runs first, independently of DM. Failure aborts the whole pipeline.
+    if (
+      automation.actionType === "DM" &&
+      automation.commentReplyWhenDm &&
+      automation.commentReplyWhenDm.length > 0
+    ) {
+      await checkRateLimits(instagramUserId);
+
+      // Randomly pick one of the configured public replies
+      const pickedReply =
+        automation.commentReplyWhenDm[
+          Math.floor(Math.random() * automation.commentReplyWhenDm.length)
+        ];
+
+      const commentReplyMessage = automation.useVariables
+        ? replaceVariables(pickedReply, comment)
+        : pickedReply;
+
+      try {
+        await replyToComment({
+          commentId: comment.id,
+          message: commentReplyMessage,
+          accessToken,
+          instagramUserId,
+        });
+        logger.info(
+          { automationId, commentId: comment.id },
+          "[Executor] Step 1: Public reply sent",
+        );
+      } catch (publicReplyError: any) {
+        // Comment may have been deleted — log and abort, don't send DM
+        logger.error(
+          {
+            automationId,
+            commentId: comment.id,
+            error: publicReplyError.message,
+          },
+          "[Executor] Step 1: Public reply failed — aborting pipeline",
+        );
+        throw publicReplyError;
+      }
+    }
+
+    // ─── STEP 1b: Comment-only flow (COMMENT_REPLY action type) ───────────────
     if (automation.actionType === "COMMENT_REPLY") {
-      // Checks API-driven Rate Limits via Redis before firing
       await checkRateLimits(instagramUserId);
 
       const result = await replyToComment({
@@ -62,135 +119,255 @@ export async function executeAutomation(
       executionStatus = "SUCCESS";
       logger.info(
         { automationId, replyId: instagramMessageId },
-        "[Executor] Native COMMENT_REPLY successfully dispatched via Graph API",
+        "[Executor] COMMENT_REPLY dispatched",
       );
-    } else if (automation.actionType === "DM") {
-      // Checks API-driven Rate Limits via Redis before firing
-      await checkRateLimits(instagramUserId);
 
-      // Sends DM
-      const result = await sendDirectMessage({
-        recipientId: comment.userId,
-        commentId:
-          automation.triggerType === "STORY_REPLY" ? undefined : comment.id,
-        message: finalMessage,
-        accessToken,
-        instagramUserId,
+      return await persistExecution({
+        automationId,
+        comment,
+        actionType: automation.actionType,
+        sentMessage: finalMessage,
+        status: executionStatus,
+        instagramMessageId,
+        errorMessage: null,
       });
+    }
 
-      instagramMessageId = result.messageId || null;
-      executionStatus = "SUCCESS";
-      logger.info(
-        { automationId, messageId: instagramMessageId },
-        "[Executor] Native DM successfully dispatched via Graph API",
+    // ─── STEP 2: Ask to Follow Gate ────────────────────────────────────────────
+    // Only evaluated when DM is the action type and the feature is enabled.
+    if (automation.askToFollowEnabled) {
+      // This call counts as 1 API request — increment the usage counter
+      await checkRateLimits(instagramUserId);
+      await incrementApiUsage(instagramUserId, 1);
+
+      const { isFollowing } = await checkIfUserFollows(
+        instagramUserId,
+        comment.userId,
+        accessToken,
       );
 
-      // Replies to the comment after successfully sending DM if configured
-      if (automation.commentReplyWhenDm) {
+      if (!isFollowing) {
+        // Build the ask-to-follow message — appends profile link if configured
+        const askMessage = [
+          automation.askToFollowMessage ||
+            "Please follow us first and then comment again!",
+          automation.askToFollowLink ? `\n${automation.askToFollowLink}` : "",
+        ]
+          .join("")
+          .trim();
+
+        await checkRateLimits(instagramUserId);
+        await incrementApiUsage(instagramUserId, 1);
+
+        await sendDirectMessage({
+          recipientId: comment.userId,
+          commentId:
+            automation.triggerType === "STORY_REPLY" ? undefined : comment.id,
+          message: askMessage,
+          accessToken,
+          instagramUserId,
+        });
+
+        logger.info(
+          { automationId, commenterId: comment.userId },
+          "[Executor] Step 2: Ask to Follow message sent — pipeline halted",
+        );
+
+        // Job is done. Commenter must follow and comment again to trigger DM.
+        executionStatus = "ASK_TO_FOLLOW_SENT";
+        sentMessage = askMessage;
+
+        return await persistExecution({
+          automationId,
+          comment,
+          actionType: automation.actionType,
+          sentMessage,
+          status: "SUCCESS", // Execution was correct, log as success
+          instagramMessageId: null,
+          errorMessage: null,
+          isAskToFollow: true,
+        });
+      }
+
+      logger.info(
+        { automationId, commenterId: comment.userId },
+        "[Executor] Step 2: Commenter is following — proceeding to DM",
+      );
+    }
+
+    // ─── STEP 3: Direct Message Delivery ──────────────────────────────────────
+    // Image is sent first, then text (rate limit increments by 1 per call).
+    const dmCallCount =
+      (automation.replyImage ? 1 : 0) + (automation.replyMessage ? 1 : 0);
+
+    if (dmCallCount > 0) {
+      await checkRateLimits(instagramUserId);
+      await incrementApiUsage(instagramUserId, dmCallCount);
+
+      // Send image first if configured
+      if (automation.replyImage) {
         try {
-          await checkRateLimits(instagramUserId);
+          const quickReplies =
+            automation.triggerType === "STORY_REPLY"
+              ? [
+                  {
+                    title: QUICK_REPLIES.BYPASS.TITLE,
+                    payload: `${QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX}${automationId}`,
+                  },
+                ]
+              : undefined;
 
-          // Prepares the comment reply message
-          let commentReplyMessage = automation.commentReplyWhenDm;
-          if (automation.useVariables) {
-            commentReplyMessage = replaceVariables(
-              commentReplyMessage,
-              comment,
-            );
-          }
-
-          await replyToComment({
-            commentId: comment.id,
-            message: commentReplyMessage,
+          await sendDirectMessage({
+            recipientId: comment.userId,
+            commentId:
+              automation.triggerType === "STORY_REPLY" ? undefined : comment.id,
+            attachmentUrl: automation.replyImage,
+            quickReplies,
             accessToken,
             instagramUserId,
           });
+          logger.info({ automationId }, "[Executor] Step 3: Image DM sent");
 
-          logger.info(
-            {
-              commentId: comment.id,
+          // For story cold threads, we stop after the image/button — user taps to get more
+          if (automation.triggerType === "STORY_REPLY") {
+            executionStatus = "SUCCESS";
+            return await persistExecution({
               automationId,
-            },
-            "[Executor] Secondary comment reply sent successfully after DM",
-          );
-        } catch (commentReplyError) {
-          // Swallows the secondary action error gracefully so we don't retry the job and double DM
+              comment,
+              actionType: automation.actionType,
+              sentMessage,
+              status: executionStatus,
+              instagramMessageId: null,
+              errorMessage: null,
+            });
+          }
+
+          // Small breathing gap before the text message
+          await new Promise((r) => setTimeout(r, 1000));
+        } catch (imgError: any) {
           logger.error(
-            {
-              commentId: comment.id,
-              automationId,
-              error:
-                commentReplyError instanceof Error
-                  ? commentReplyError.message
-                  : String(commentReplyError),
-            },
-            "Error replying to comment after DM (Non-fatal)",
+            { automationId, error: imgError.message },
+            "[Executor] Step 3: Image DM failed",
           );
         }
       }
-    } else {
-      throw new Error(`Unknown action type: ${automation.actionType}`);
+
+      // Send text message
+      if (automation.replyMessage) {
+        const quickReplies = automation.replyImage
+          ? [
+              {
+                title: QUICK_REPLIES.BYPASS.TITLE,
+                payload: `${QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX}${automationId}`,
+              },
+            ]
+          : undefined;
+
+        const result = await sendDirectMessage({
+          recipientId: comment.userId,
+          commentId:
+            automation.triggerType === "STORY_REPLY" ? undefined : comment.id,
+          message: finalMessage,
+          quickReplies,
+          accessToken,
+          instagramUserId,
+        });
+        instagramMessageId = result.messageId || null;
+        logger.info(
+          { automationId, messageId: instagramMessageId },
+          "[Executor] Step 3: Text DM sent",
+        );
+      }
+
+      executionStatus = "SUCCESS";
     }
-  } catch (error) {
-    // If we catch here, we know the API action failed. We format the error message to save in db
-    // and re-throw so the central worker error handler knows the job failed
+  } catch (error: any) {
     errorMessage = error instanceof Error ? error.message : String(error);
     executionStatus = "FAILED";
     logger.error(
-      {
-        automationId,
-        actionType: automation.actionType,
-        commentId: comment.id,
-        error: errorMessage,
-      },
-      "[Executor] Failed to execute automation action natively",
+      { automationId, commentId: comment.id, error: errorMessage },
+      "[Executor] Pipeline error — recording failure",
     );
-    // Before throwing, intentionally let the code fall-through so we can log the "FAILED" execution to db
   }
 
-  // Records the execution status (SUCCESS or FAILED) and increments counts
+  return await persistExecution({
+    automationId,
+    comment,
+    actionType: automation.actionType,
+    sentMessage,
+    status: executionStatus === "FAILED" ? "FAILED" : "SUCCESS",
+    instagramMessageId,
+    errorMessage,
+  });
+}
+
+// ─── Persistence Helper ────────────────────────────────────────────────────────
+
+interface PersistOptions {
+  automationId: string;
+  comment: CommentData;
+  actionType: string;
+  sentMessage: string;
+  status: "SUCCESS" | "FAILED";
+  instagramMessageId: string | null;
+  errorMessage: string | null;
+  isAskToFollow?: boolean;
+}
+
+/**
+ * Atomically records execution result in Postgres and increments trigger count on success.
+ * On duplicate key (race condition between workers), silently returns success.
+ */
+async function persistExecution(
+  opts: PersistOptions,
+): Promise<ExecutionResult> {
+  const {
+    automationId,
+    comment,
+    actionType,
+    sentMessage,
+    status,
+    instagramMessageId,
+    errorMessage,
+  } = opts;
+
   try {
     const { executeTransaction } =
       await import("../../server/repositories/repository-utils");
 
-    // We update stats atomically.
     const execution = await executeTransaction(
       async (tx) => {
-        // Creates execution record
-        const execution = await tx.automationExecution.create({
+        const record = await tx.automationExecution.create({
           data: {
             automationId,
             commentId: comment.id,
             commentText: comment.text,
             commentUsername: comment.username,
             commentUserId: comment.userId,
-            actionType: automation.actionType,
-            sentMessage: finalMessage,
-            status: executionStatus,
+            actionType,
+            sentMessage,
+            status,
             errorMessage,
             instagramMessageId,
             executedAt: new Date(),
           },
         });
 
-        if (executionStatus === "SUCCESS") {
+        if (status === "SUCCESS") {
           await tx.automation.update({
             where: { id: automationId },
             data: {
-              timesTriggered: {
-                increment: 1,
-              },
+              timesTriggered: { increment: 1 },
               lastTriggeredAt: new Date(),
             },
           });
         }
 
         logger.info(
-          { executionId: execution.id, status: executionStatus },
-          "[Executor] Postgres stats seamlessly updated",
+          { executionId: record.id, status },
+          "[Executor] Execution persisted",
         );
-
-        return execution;
+        return record;
       },
       {
         operation: "executeAutomation",
@@ -198,35 +375,29 @@ export async function executeAutomation(
       },
     );
 
-    // If the API call originally failed, we bubbled it to Postgres (above), now we must bubble it to Worker.ts
-    if (executionStatus === "FAILED" && errorMessage) {
+    if (status === "FAILED" && errorMessage) {
       throw new Error(errorMessage);
     }
 
-    return {
-      success: true,
-      executionId: execution.id,
-    };
+    return { success: true, executionId: execution.id };
   } catch (dbError: any) {
     const { isDuplicateKeyError } =
       await import("../../server/repositories/repository-utils");
 
-    // Concurrency Trap: Another worker managed to persist the result first
     if (isDuplicateKeyError(dbError) || dbError?.code === "P2002") {
       logger.info(
         { automationId, commentId: comment.id },
-        "Automation execution skipped (duplicate unique constraint hit)",
+        "[Executor] Duplicate execution skipped",
       );
       return { success: true };
     }
 
-    // Unhandled db crash. Propagate.
     throw dbError;
   }
 }
 
 /**
- * Batch executes multiple automations for a comment
+ * Batch executes automations for a single comment sequentially.
  */
 export async function batchExecuteAutomations(
   automations: Automation[],

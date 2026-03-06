@@ -15,6 +15,7 @@ import {
   validateStoryReplyEvent,
 } from "./validators/payload";
 import { logger } from "../../utils/pino";
+import { QUICK_REPLIES } from "../../../config/instagram.config";
 import {
   isUserConnected,
   isCommentProcessed,
@@ -84,12 +85,27 @@ export async function processWebhookEvent(
 
     if (entry.messaging) {
       for (const messagingEvent of entry.messaging) {
+        // 1. Story Replies
         if (messagingEvent.message?.reply_to?.story) {
           logger.info(
             { webhookId, senderId: messagingEvent.sender.id },
             "[Webhook Event] Routing to handleStoryReplyEvent",
           );
           await handleStoryReplyEvent(entry.id, messagingEvent);
+        }
+
+        // 2. Quick Reply Button Taps
+        const qrPayload = (messagingEvent.message as any)?.quick_reply?.payload;
+        if (qrPayload?.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX)) {
+          logger.info(
+            {
+              webhookId,
+              senderId: messagingEvent.sender.id,
+              payload: qrPayload,
+            },
+            "[Webhook Event] Routing to handleQuickReplyEvent",
+          );
+          await handleQuickReplyEvent(entry.id, messagingEvent, qrPayload);
         }
       }
     }
@@ -372,6 +388,75 @@ async function handleCommentEvent(
     logger.info(
       { commentId: event.id, automationId: match.automation.id, success: true },
       "[CommentReply] Automation execution completed successfully.",
+    );
+  }
+}
+
+/**
+ * Handles Quick Reply Button Taps
+ * Specifically for delivering images after the messaging window has been opened
+ */
+async function handleQuickReplyEvent(
+  instagramUserId: string,
+  messagingEvent: any,
+  payload: string,
+): Promise<void> {
+  const automationId = payload.split(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX)[1];
+  const senderId = messagingEvent.sender.id;
+
+  logger.info(
+    { automationId, senderId, instagramUserId },
+    "[QuickReply] Processing image delivery request via Button Tap",
+  );
+
+  // 1. Fetch the Automation
+  const { findAutomationById } =
+    await import("../../../server/repositories/automation.repository");
+  const automation = await findAutomationById(automationId);
+
+  if (!automation || !automation.replyImage) {
+    logger.error(
+      { automationId },
+      "[QuickReply] Automation or Image URL not found for this button tap",
+    );
+    return;
+  }
+
+  // 2. Fetch the internal account to get access token
+  const { findInstaAccountByInstagramUserId } =
+    await import("../../../server/repositories/insta-account.repository");
+  const dbAccount = await findInstaAccountByInstagramUserId(instagramUserId);
+  if (!dbAccount) {
+    logger.error(
+      { instagramUserId },
+      "[QuickReply] Internal account not found",
+    );
+    return;
+  }
+
+  const accessToken = await getAccessToken(dbAccount.id, async () => {
+    const { getValidAccessToken } = await import("../token-manager");
+    return getValidAccessToken(dbAccount.id);
+  });
+
+  // 3. Send the image direct
+  const { sendDirectMessage: dmFunc } = await import("../messaging-api");
+
+  try {
+    await dmFunc({
+      recipientId: senderId,
+      attachmentUrl: automation.replyImage,
+      accessToken,
+      instagramUserId,
+    });
+    logger.info(
+      { automationId, senderId },
+      "[QuickReply] SUCCESS: Image delivered via button tap",
+    );
+  } catch (err: any) {
+    logger.error(
+      { error: err.message, automationId, senderId },
+      "[QuickReply] FAILED to deliver image after button tap",
     );
   }
 }

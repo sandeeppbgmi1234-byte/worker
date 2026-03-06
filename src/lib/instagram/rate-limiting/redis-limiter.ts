@@ -4,7 +4,10 @@
  */
 
 import { Redis } from "ioredis";
-import { RATE_LIMIT_THRESHOLDS } from "../../../config/instagram.config";
+import {
+  RATE_LIMIT_THRESHOLDS,
+  MESSAGING_CONSTRAINTS,
+} from "../../../config/instagram.config";
 import { InstagramRateLimitError } from "../api/api-errors";
 import { logger } from "../../utils/pino";
 
@@ -67,18 +70,39 @@ export async function updateRateLimitsFromHeaders(
 }
 
 /**
+ * Manually increments the predicted API usage for an account.
+ * This is used to track rapid-fire sequential calls (like Image + Text)
+ * before the next response header comes back to update the percentages.
+ */
+export async function incrementApiUsage(
+  instagramUserId: string,
+  count: number = 1,
+) {
+  const key = `instagram:rate_limit:predicted_count:${instagramUserId}`;
+  // We increment a temporary predicted call counter
+  await redis.incrby(key, count);
+  // Expire after 1 hour - to track the 200 requests/hour limit mentioned by user
+  await redis.expire(key, 3600);
+}
+
+/**
  * Verifies if it is safe to make an Instagram API call based on Redis limits
  * Throws InstagramRateLimitError if unsafe.
  */
 export async function checkRateLimits(instagramUserId: string): Promise<void> {
-  const [appUsageStr, accountUsageStr] = await redis.mget(
+  const [appUsageStr, accountUsageStr, predictedCallsStr] = await redis.mget(
     KEYS.APP_USAGE,
     KEYS.ACCOUNT_USAGE(instagramUserId),
+    `instagram:rate_limit:predicted_count:${instagramUserId}`,
   );
 
   const appUsage = appUsageStr ? parseInt(appUsageStr, 10) : 0;
   const accountUsage = accountUsageStr ? parseInt(accountUsageStr, 10) : 0;
+  const predictedCalls = predictedCallsStr
+    ? parseInt(predictedCallsStr, 10)
+    : 0;
 
+  // 1. Check Meta-provided percentages
   if (appUsage >= RATE_LIMIT_THRESHOLDS.APP_USAGE_STOP_PERCENT) {
     logger.warn(
       { appUsage, threshold: RATE_LIMIT_THRESHOLDS.APP_USAGE_STOP_PERCENT },
@@ -87,6 +111,23 @@ export async function checkRateLimits(instagramUserId: string): Promise<void> {
     throw new InstagramRateLimitError(
       `App-Level Rate Limit at ${appUsage}%`,
       true,
+    );
+  }
+
+  // 2. Check Account-Level predicted calls (Burst protection)
+  const safeThreshold = MESSAGING_CONSTRAINTS.BURST_LIMIT_PER_HOUR - 5;
+  if (predictedCalls >= safeThreshold) {
+    logger.warn(
+      {
+        instagramUserId,
+        predictedCalls,
+        limit: MESSAGING_CONSTRAINTS.BURST_LIMIT_PER_HOUR,
+      },
+      "Account-Level Burst Rate Limit Protected (Local Stop)",
+    );
+    throw new InstagramRateLimitError(
+      `Local health-check: Hourly burst limit reached (${predictedCalls}/${MESSAGING_CONSTRAINTS.BURST_LIMIT_PER_HOUR})`,
+      false,
     );
   }
 

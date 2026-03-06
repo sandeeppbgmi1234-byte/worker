@@ -104,8 +104,14 @@ model Automation {
 
   // Action configuration
   actionType         String // DM | COMMENT_REPLY
-  replyMessage       String
-  commentReplyWhenDm String?
+  replyMessage       String // Fixed DM message
+  replyImage         String? // Uploaded image URL for DM
+  commentReplyWhenDm String[] @default([]) // Multiple public replies — worker picks one randomly
+
+  // Ask to Follow — gate applied before DM delivery
+  askToFollowEnabled Boolean @default(false)
+  askToFollowMessage String? // Message sent when commenter doesn't follow yet
+  askToFollowLink    String? // Profile link appended to the Ask to Follow message
 
   useVariables Boolean @default(true)
 

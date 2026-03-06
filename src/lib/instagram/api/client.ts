@@ -110,6 +110,11 @@ export async function fetchFromInstagram<T = any>(
     headers.set("Content-Type", "application/json");
   }
 
+  // If using body-based auth, extract it to headers if present
+  if (init.body?.access_token) {
+    headers.set("Authorization", `Bearer ${init.body.access_token}`);
+  }
+
   const reqOptions: RequestInit = {
     ...init,
     headers,

@@ -1,6 +1,5 @@
 import { getRedisClient } from "../client";
 import { KEYS, TTL } from "../keys";
-import { RedisError } from "../errors";
 import { logger } from "../../utils/pino";
 import { RATE_LIMIT_THRESHOLDS } from "../../../config/instagram.config";
 import { InstagramRateLimitError } from "../../instagram/api/api-errors";
@@ -115,6 +114,32 @@ export async function checkRateLimits(instagramUserId: string): Promise<void> {
     logger.error(
       { instagramUserId, error: error.message },
       "[Redis:RateLimit] Rate limit check failed, falling open",
+    );
+  }
+}
+
+/**
+ * Manually increments the predicted API usage for an account.
+ * This is used to track rapid-fire sequential calls (like Image + Text)
+ * before the next response header comes back to update the percentages.
+ */
+export async function incrementApiUsage(
+  instagramUserId: string,
+  count: number = 1,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const key = `instagram:rate_limit:predicted_count:${instagramUserId}`;
+  try {
+    // We increment a temporary predicted call counter
+    await redis.incrby(key, count);
+    // Expire after 1 hour - to track the rolling burst limit
+    await redis.expire(key, 3600);
+  } catch (error: any) {
+    logger.error(
+      { instagramUserId, error: error.message },
+      "[Redis:RateLimit] Failed to increment predicted usage",
     );
   }
 }

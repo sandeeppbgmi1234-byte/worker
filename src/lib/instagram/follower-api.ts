@@ -21,15 +21,14 @@ export async function checkIfUserFollows(
   commenterIgUserId: string,
   accessToken: string,
 ): Promise<FollowerCheckResult> {
-  // Endpoint: GET /{owner-ig-user-id}/followers?user_id={commenter-ig-user-id}
-  const url = buildGraphApiUrl(GRAPH_API.ENDPOINTS.USER_INFO(ownerIgUserId));
-  url.searchParams.set("fields", "followers");
-  url.searchParams.set("user_id", commenterIgUserId);
+  // Use graph.instagram.com via centralized helper (Correct for Instagram-scoped tokens)
+  const url = buildGraphApiUrl(commenterIgUserId);
+  url.searchParams.set("fields", "is_user_follow_business");
   url.searchParams.set("access_token", accessToken);
 
   logger.info(
     { ownerIgUserId, commenterIgUserId },
-    "[FollowerAPI] Checking follower status",
+    "[FollowerAPI] Checking follower status via is_user_follow_business",
   );
 
   try {
@@ -38,23 +37,46 @@ export async function checkIfUserFollows(
       instagramUserId: ownerIgUserId,
     });
 
-    // If the data array is non-empty, the commenter is in the owner's followers list
-    const isFollowing =
-      Array.isArray(result?.followers?.data) &&
-      result.followers.data.length > 0;
+    // Detailed debug logging to see what Meta actually returns
+    logger.info(
+      { ownerIgUserId, commenterIgUserId, result },
+      "[FollowerAPI] Instagram Follower Check Response",
+    );
+
+    // If is_user_follow_business is missing from the response, it usually means the field isn't available
+    // or the app doesn't have the necessary permissions (instagram_business_basic).
+    if (
+      result === undefined ||
+      result === null ||
+      !("is_user_follow_business" in result)
+    ) {
+      logger.warn(
+        { ownerIgUserId, commenterIgUserId, result },
+        "[FollowerAPI] 'is_user_follow_business' field missing or null in Meta response. Check App Permissions.",
+      );
+      return { isFollowing: false };
+    }
+
+    const isFollowing = result.is_user_follow_business === true;
 
     logger.info(
       { ownerIgUserId, commenterIgUserId, isFollowing },
-      "[FollowerAPI] Follower check complete",
+      "[FollowerAPI] Result determined",
     );
 
     return { isFollowing };
   } catch (error: any) {
     logger.error(
-      { ownerIgUserId, commenterIgUserId, error: error.message },
-      "[FollowerAPI] Follower check failed — defaulting to non-follower",
+      {
+        ownerIgUserId,
+        commenterIgUserId,
+        error: error.message,
+        status: error.status,
+        subcode: error.subcode,
+      },
+      "[FollowerAPI] Follower check failed (API Error)",
     );
-    // Fail-safe: treat as non-follower on API error to avoid sending DM without consent
+    // Fail-safe: treat as non-follower on API error
     return { isFollowing: false };
   }
 }

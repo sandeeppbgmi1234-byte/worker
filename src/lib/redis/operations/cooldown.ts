@@ -65,3 +65,30 @@ export async function isUserOnCooldown(
   //   return false;
   // }
 }
+
+/**
+ * Removes a user cooldown lock.
+ * Used when an execution results in a non-final state (like Ask to Follow).
+ */
+export async function clearUserCooldown(
+  instagramUserId: string,
+  automationId: string,
+): Promise<void> {
+  const redis = getRedisClient();
+  const key = KEYS.USER_COOLDOWN(instagramUserId, automationId);
+
+  if (!redis) return;
+
+  try {
+    await redis.del(key);
+    logger.info(
+      { instagramUserId, automationId },
+      "[Redis:Cooldown] Lock manually cleared",
+    );
+  } catch (error: any) {
+    logger.error(
+      { instagramUserId, automationId, error: error.message },
+      "[Redis:Cooldown] Failed to clear lock",
+    );
+  }
+}

@@ -9,9 +9,12 @@ import { sendDirectMessage } from "../instagram/messaging-api";
 import { replyToComment } from "../instagram/comments-api";
 import { checkIfUserFollows } from "../instagram/follower-api";
 import {
+  clearUserCooldown,
+  isCommentProcessed,
+  isUserOnCooldown,
   checkRateLimits,
   incrementApiUsage,
-} from "../instagram/rate-limiting/redis-limiter";
+} from "../redis";
 import { logger } from "../utils/pino";
 import { Automation } from "@prisma/client";
 import { QUICK_REPLIES } from "../../config/instagram.config";
@@ -176,6 +179,10 @@ export async function executeAutomation(
         // Job is done. Commenter must follow and comment again to trigger DM.
         executionStatus = "ASK_TO_FOLLOW_SENT";
         sentMessage = askMessage;
+
+        // CLEAR COOLDOWN: Since they hit a hurdle (Ask to Follow), we MUST clear their cooldown
+        // so they have the chance to comment again immediately after following.
+        await clearUserCooldown(comment.userId, automationId).catch(() => {});
 
         return await persistExecution({
           automationId,

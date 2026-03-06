@@ -24,12 +24,13 @@ export { getAccessToken, cacheAccessToken } from "./operations/token";
 export { isCommentProcessed } from "./operations/comment";
 
 // User Cooldowns
-export { isUserOnCooldown } from "./operations/cooldown";
+export { isUserOnCooldown, clearUserCooldown } from "./operations/cooldown";
 
 // Meta API Rate Limits
 export {
   updateRateLimitsFromHeaders,
   checkRateLimits,
+  incrementApiUsage,
 } from "./operations/rate-limit";
 // Automations and DB Account Caching
 export {

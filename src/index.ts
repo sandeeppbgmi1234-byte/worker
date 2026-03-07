@@ -1,23 +1,21 @@
-import { setupWorker } from "./worker";
-import { prisma } from "./db/db.ts";
+import { setupWorker } from "./queue/worker";
+import { prisma } from "./db/db";
 import Redis from "ioredis";
 import type { Worker } from "bullmq";
-import { logger } from "./lib/utils/pino.ts";
+import { logger } from "./logger";
+import { REDIS_CONNECTION } from "./config/redis.config";
+import { WORKER_CONFIG } from "./config/worker.config";
 
-const PORT = process.env.WORKER_PORT || 8080;
-
-// Stores worker instance
+const PORT = WORKER_CONFIG.PORT;
 let worker: Worker | null = null;
 
-// Starts the BullMQ worker
 try {
   worker = setupWorker();
 } catch (error) {
-  logger.error(error, "❌ Failed to start worker:");
+  logger.error(error, "Failed to start worker:");
   process.exit(1);
 }
 
-// Graceful shutdown on SIGTERM
 process.on("SIGTERM", async () => {
   logger.info("SIGTERM received, shutting down gracefully...");
   if (worker) {
@@ -27,34 +25,26 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-// Lightweight HTTP server for health checks using Bun
 Bun.serve({
   port: PORT,
   async fetch(req) {
     const url = new URL(req.url);
 
-    // Health check endpoint
     if (url.pathname === "/health") {
-      const status = {
-        database: "ok",
-        redis: "ok",
-        bullmq: "ok",
-      };
+      const status = { database: "ok", redis: "ok", bullmq: "ok" };
 
-      // Check database connection
       try {
         await prisma.$connect();
       } catch {
         status.database = "error";
       }
 
-      // Check Redis connection
       try {
         const redis = new Redis({
-          host: process.env.UPSTASH_REDIS_HOST,
-          port: 6379,
-          username: process.env.UPSTASH_REDIS_USERNAME,
-          password: process.env.UPSTASH_REDIS_PASSWORD,
+          host: REDIS_CONNECTION.host,
+          port: REDIS_CONNECTION.port,
+          username: REDIS_CONNECTION.username,
+          password: REDIS_CONNECTION.password,
           tls: {},
           connectTimeout: 3000,
         });
@@ -64,7 +54,6 @@ Bun.serve({
         status.redis = "error";
       }
 
-      // Check BullMQ worker status
       if (!worker || !worker.isRunning()) {
         status.bullmq = "error";
       }
@@ -85,10 +74,9 @@ Bun.serve({
       );
     }
 
-    // Default 404 for other routes
     return new Response("Not Found", { status: 404 });
   },
 });
 
-logger.info(`🚀 Worker service running on port ${PORT}`);
-logger.info(`📍 Health check: http://localhost:${PORT}/health`);
+logger.info(`Worker service running on port ${PORT}`);
+logger.info(`Health check: http://localhost:${PORT}/health`);

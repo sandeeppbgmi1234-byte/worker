@@ -1,45 +1,26 @@
-/**
- * Instagram Graph API Configuration
- * Centralized configuration for Instagram API with Instagram Login
- * Uses graph.instagram.com (not graph.facebook.com)
- */
-
-// Graph API configuration
 export const GRAPH_API = {
   VERSION: "v21.0",
   BASE_URL: "https://graph.instagram.com",
-  ENDPOINTS: {
-    USER_MEDIA: (userId: string) => `${userId}/media`,
-    POST_COMMENTS: (postId: string) => `${postId}/comments`,
-    USER_INFO: (userId: string) => `${userId}`,
-    SEND_MESSAGE: (igUserId: string) => `${igUserId}/messages`,
-    REPLY_COMMENT: (commentId: string) => `${commentId}/replies`,
-  },
 } as const;
 
-// Messaging constraints
 export const MESSAGING_CONSTRAINTS = {
   WINDOW_HOURS: 24,
   RATE_LIMIT_PER_HOUR: 100,
-  BURST_LIMIT_PER_HOUR: 200, // Local protective safety buffer
+  BURST_LIMIT_PER_HOUR: 200,
   MESSAGE_MAX_LENGTH: 1000,
 } as const;
 
-// Rate limiting configuration
 export const RATE_LIMITS = {
   POSTS_PER_REQUEST: 25,
   COMMENTS_PER_REQUEST: 50,
-  REQUEST_TIMEOUT_MS: 10000, // 10 seconds
+  REQUEST_TIMEOUT_MS: 10000,
 } as const;
 
-// Meta Graph API Usage Thresholds
-// We stop processing if the percentage exceeds the STOP threshold.
 export const RATE_LIMIT_THRESHOLDS = {
   APP_USAGE_STOP_PERCENT: 85,
   ACCOUNT_USAGE_STOP_PERCENT: 90,
 } as const;
 
-// Quick Replie Configuration (Bypass Media Restriction)
 export const QUICK_REPLIES = {
   BYPASS: {
     TITLE: "Tap to see media 📸",
@@ -47,14 +28,6 @@ export const QUICK_REPLIES = {
   },
 } as const;
 
-/**
- * Builds a complete Graph API URL with version and endpoint
- */
-export function buildGraphApiUrl(endpoint: string): URL {
-  return new URL(`${GRAPH_API.BASE_URL}/${GRAPH_API.VERSION}/${endpoint}`);
-}
-
-// Error messages (Used by Worker)
 export const ERROR_MESSAGES = {
   AUTH: {
     NO_USER: "You need to be signed in. Please login and try again.",

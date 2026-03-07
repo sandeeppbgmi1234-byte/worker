@@ -1,0 +1,24 @@
+export const WORKER_CONFIG = {
+  PORT: process.env.WORKER_PORT || 8080,
+  QUEUE_NAME: "webhook-processing",
+  CONCURRENCY: 1,
+  LIMITER: {
+    MAX_JOBS: 8,
+    DURATION_MS: 60_000,
+  },
+  RETENTION: {
+    COMPLETED_COUNT: 100,
+    FAILED_COUNT: 500,
+  },
+  STALLED: {
+    INTERVAL_MS: 30_000,
+    MAX_COUNT: 2,
+  },
+  DELAYS: {
+    RATE_LIMIT_APP_LEVEL_MS: 5 * 60_000,
+    RATE_LIMIT_ACCOUNT_LEVEL_MS: 10 * 60_000,
+    BETWEEN_DMS_MS: 1000,
+  },
+  MAX_RETRIES: 3,
+  MAX_TEXT_LENGTH: 5000,
+} as const;

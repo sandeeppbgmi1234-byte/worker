@@ -9,6 +9,7 @@ export async function updateRateLimitsFromHeadersR(
   instagramUserId: string,
   appUsage: Record<string, any> | null,
   businessUsage: Record<string, any> | null,
+  adAccountUsage?: Record<string, any> | null,
 ) {
   const redis = getRedisClient();
   if (!redis) return;
@@ -16,18 +17,31 @@ export async function updateRateLimitsFromHeadersR(
   try {
     const pipeline = redis.pipeline();
 
-    if (appUsage && typeof appUsage.call_count === "number") {
-      pipeline.set(KEYS.APP_USAGE(), appUsage.call_count, "EX", TTL.API_USAGE);
+    // 1. App-Level Usage
+    if (appUsage) {
+      const usage = Math.max(
+        appUsage.call_count || 0,
+        appUsage.total_time || 0,
+        appUsage.total_cputime || 0,
+      );
+      if (usage > 0) {
+        pipeline.set(KEYS.APP_USAGE(), usage, "EX", TTL.API_USAGE);
+      }
     }
 
+    // 2. Business Usage
     if (businessUsage) {
       let maxAccountUsage = 0;
       for (const key of Object.keys(businessUsage)) {
         const metrics = businessUsage[key];
         if (Array.isArray(metrics) && metrics.length > 0) {
-          const count = metrics[0].call_count;
-          if (typeof count === "number" && count > maxAccountUsage)
-            maxAccountUsage = count;
+          const m = metrics[0];
+          const usage = Math.max(
+            m.call_count || 0,
+            m.total_time || 0,
+            m.total_cputime || 0,
+          );
+          if (usage > maxAccountUsage) maxAccountUsage = usage;
         }
       }
       if (maxAccountUsage > 0)
@@ -37,6 +51,17 @@ export async function updateRateLimitsFromHeadersR(
           "EX",
           TTL.API_USAGE,
         );
+    }
+
+    // 3. Ad Account Usage
+    if (adAccountUsage && adAccountUsage.acc_id_util_pct) {
+      const usage = Math.round(adAccountUsage.acc_id_util_pct);
+      pipeline.set(
+        KEYS.ACCOUNT_USAGE(instagramUserId),
+        usage,
+        "EX",
+        TTL.API_USAGE,
+      );
     }
 
     await pipeline.exec();

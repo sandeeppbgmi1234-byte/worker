@@ -86,16 +86,41 @@ export async function fetchFromInstagram<T = any>(
         ?.includes("application/json");
       const data = isJson ? await response.json() : await response.text();
 
-      const { appUsage, businessUsage } = extractUsageHeaders(response);
-      if (instagramUserId && (appUsage || businessUsage)) {
+      const { appUsage, businessUsage, adUsage } =
+        extractUsageHeaders(response);
+      if (instagramUserId && (appUsage || businessUsage || adUsage)) {
         await updateRateLimitsFromHeadersR(
           instagramUserId,
           appUsage,
           businessUsage,
+          adUsage,
         );
       }
 
       if (!response.ok) {
+        // Log detailed error information for Meta Rate Limits
+        const errorBody = data as any;
+        const code = errorBody?.error?.code;
+        if (
+          response.status === 429 ||
+          code === 4 ||
+          code === 17 ||
+          code === 32 ||
+          code === 613
+        ) {
+          logger.warn(
+            {
+              instagramUserId,
+              errorCode: code,
+              errorSubcode: errorBody?.error?.error_subcode,
+              message: errorBody?.error?.message,
+              throttled: errorBody?.error?.throttled,
+              backend_qps: errorBody?.error?.backend_qps,
+              complexity_score: errorBody?.error?.complexity_score,
+            },
+            "Instagram Rate Limit/Throttling detected in worker",
+          );
+        }
         handleInstagramError(data, response.status);
       }
 

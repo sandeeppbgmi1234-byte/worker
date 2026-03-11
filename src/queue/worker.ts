@@ -2,11 +2,11 @@ import { Worker } from "bullmq";
 import { logger } from "../logger";
 import { processWebhookJob } from "./processor";
 import { WORKER_CONFIG } from "../config/worker.config";
-import { REDIS_CONNECTION } from "../config/redis.config";
+import { QUEUE_CONNECTION } from "../config/redis.config";
 
 export function setupWorker(): Worker {
   const worker = new Worker(WORKER_CONFIG.QUEUE_NAME, processWebhookJob, {
-    connection: REDIS_CONNECTION,
+    connection: QUEUE_CONNECTION,
     concurrency: WORKER_CONFIG.CONCURRENCY,
     limiter: {
       max: WORKER_CONFIG.LIMITER.MAX_JOBS,

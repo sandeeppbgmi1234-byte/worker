@@ -3,7 +3,7 @@ import { prisma } from "./db/db";
 import Redis from "ioredis";
 import type { Worker } from "bullmq";
 import { logger } from "./logger";
-import { REDIS_CONNECTION } from "./config/redis.config";
+import { REDIS_CONNECTION, QUEUE_CONNECTION } from "./config/redis.config";
 import { WORKER_CONFIG } from "./config/worker.config";
 
 const PORT = WORKER_CONFIG.PORT;
@@ -31,7 +31,12 @@ Bun.serve({
     const url = new URL(req.url);
 
     if (url.pathname === "/health") {
-      const status = { database: "ok", redis: "ok", bullmq: "ok" };
+      const status = {
+        database: "ok",
+        redis: "ok",
+        queue_redis: "ok",
+        bullmq: "ok",
+      };
 
       try {
         await prisma.$connect();
@@ -41,17 +46,24 @@ Bun.serve({
 
       try {
         const redis = new Redis({
-          host: REDIS_CONNECTION.host,
-          port: REDIS_CONNECTION.port,
-          username: REDIS_CONNECTION.username,
-          password: REDIS_CONNECTION.password,
-          tls: {},
+          ...REDIS_CONNECTION,
           connectTimeout: 3000,
         });
         await redis.ping();
         await redis.quit();
       } catch {
         status.redis = "error";
+      }
+
+      try {
+        const qRedis = new Redis({
+          ...QUEUE_CONNECTION,
+          connectTimeout: 3000,
+        });
+        await qRedis.ping();
+        await qRedis.quit();
+      } catch {
+        status.queue_redis = "error";
       }
 
       if (!worker || !worker.isRunning()) {
@@ -61,6 +73,7 @@ Bun.serve({
       const allOk =
         status.database === "ok" &&
         status.redis === "ok" &&
+        status.queue_redis === "ok" &&
         status.bullmq === "ok";
 
       return Response.json(

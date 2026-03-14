@@ -40,7 +40,8 @@ export async function executeAskToFollow(
       "Oh no! It seems you're not following me 👀 It would really mean a lot if you visit my profile and hit the follow button 😇. Once you have done that, click on the 'I'm following' button below and you will get the link ✨.";
     const askMessage = automation.askToFollowMessage || defaultMessage;
     const profileUrl =
-      automation.askToFollowLink || `https://ig.me/_u/${instagramUsername}`;
+      automation.askToFollowLink ||
+      `https://www.instagram.com/${instagramUsername}`;
 
     await checkRateLimits(instagramUserId);
     await incrementApiUsage(instagramUserId, 1);

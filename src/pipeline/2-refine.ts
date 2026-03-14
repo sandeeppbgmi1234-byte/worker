@@ -25,6 +25,10 @@ export function refineEntries(
       for (const change of entry.changes) {
         if (change.field === "comments") {
           const commentData = change.value;
+
+          // 1. Noise Filter: Skips self-comments to prevent infinite automation loops
+          if (commentData.from?.self_ig_scoped_id) continue;
+
           const timestamp = commentData.timestamp || entry.time;
           const mediaId = commentData.media?.id || commentData.media_id;
 
@@ -36,7 +40,7 @@ export function refineEntries(
             !timestamp ||
             !mediaId
           ) {
-            continue; // Skip silently inside batch
+            continue; // Skip silently inside batch if malformed
           }
 
           events.push({
@@ -59,6 +63,9 @@ export function refineEntries(
 
     if (entry.messaging) {
       for (const msg of entry.messaging) {
+        // 2. Noise Filter: Skips self-sent 'echo' DMs
+        if (msg.message?.is_echo) continue;
+
         if (msg.message?.reply_to?.story) {
           if (!msg.sender?.id || !msg.message.text || !msg.message.mid)
             continue;
@@ -78,15 +85,25 @@ export function refineEntries(
           });
         }
 
-        const qrPayload = msg.message?.quick_reply?.payload;
-        if (qrPayload?.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX)) {
+        const qrPayload =
+          msg.message?.quick_reply?.payload || msg.postback?.payload;
+        if (
+          qrPayload?.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX) ||
+          qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX)
+        ) {
           events.push({
             type: "QUICK_REPLY",
             webhookId: entry.id,
             time: entry.time,
             instagramUserId,
             payload: qrPayload,
-            event: msg,
+            event: {
+              messageId:
+                msg.message?.mid || msg.postback?.mid || `pb_${msg.timestamp}`,
+              text: msg.message?.text || msg.postback?.title || "Quick Reply",
+              senderId: msg.sender.id,
+              timestamp: String(msg.timestamp),
+            },
           });
         }
       }

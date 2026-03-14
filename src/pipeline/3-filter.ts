@@ -7,6 +7,7 @@ import { findInstaAccountByInstagramUserId } from "../repositories/insta-account
 import {
   findActiveAutomationsByPost,
   findActiveAutomationsByStory,
+  findAutomationById,
 } from "../repositories/automation.repository";
 import { RefinedEvent, FilteredEvent } from "../types";
 import { Automation } from "@prisma/client";
@@ -59,10 +60,28 @@ export async function filterEvents(
         },
       );
     } else if (eventWrapper.type === "QUICK_REPLY") {
-      // Handled independently
+      const payload = eventWrapper.payload;
+      const parts = payload.split(":");
+      const automationId = parts[parts.length - 1];
+
+      if (automationId) {
+        const automationRes = await findAutomationById(automationId);
+        if (automationRes.ok && automationRes.value) {
+          filtered.push({
+            event: eventWrapper,
+            accountId: accountResult.id,
+            instagramUsername: accountResult.username,
+            matchedAutomations: [automationRes.value],
+          });
+          continue;
+        }
+      }
+
+      // Fallback if no specific automation found for other QRs
       filtered.push({
         event: eventWrapper,
         accountId: accountResult.id,
+        instagramUsername: accountResult.username,
         matchedAutomations: [],
       });
       continue;
@@ -105,6 +124,7 @@ export async function filterEvents(
       filtered.push({
         event: eventWrapper,
         accountId: accountResult.id,
+        instagramUsername: accountResult.username,
         matchedAutomations: matches,
       });
     }

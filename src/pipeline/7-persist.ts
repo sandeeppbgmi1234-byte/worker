@@ -13,12 +13,16 @@ export async function persistOutcomes(
           await tx.automationExecution.create({
             data: {
               automationId: outcome.automationId,
-              commentId: outcome.commentData.id || outcome.eventId,
-              commentText: outcome.commentData.text,
+              commentId: outcome.eventId || "unknown_event",
+              commentText: outcome.commentData.text || "Interaction",
               commentUsername:
-                outcome.commentData.username || outcome.commentData.senderId,
+                outcome.commentData.username ||
+                outcome.commentData.senderId ||
+                "unknown",
               commentUserId:
-                outcome.commentData.userId || outcome.commentData.senderId,
+                outcome.commentData.userId ||
+                outcome.commentData.senderId ||
+                "unknown",
               actionType: outcome.actionType,
               sentMessage: outcome.sentMessage || "",
               status: outcome.status,

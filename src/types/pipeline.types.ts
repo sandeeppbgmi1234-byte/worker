@@ -16,6 +16,12 @@ export interface WebhookEntry {
       text: string;
       reply_to?: { story: { id: string } };
       quick_reply?: { payload: string };
+      is_echo?: boolean;
+    };
+    postback?: {
+      title: string;
+      payload: string;
+      mid?: string;
     };
   }>;
 }
@@ -75,6 +81,7 @@ export type RefinedEvent =
 export interface FilteredEvent {
   event: RefinedEvent;
   accountId: string;
+  instagramUsername: string;
   matchedAutomations: Automation[];
 }
 

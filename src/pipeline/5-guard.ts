@@ -12,14 +12,19 @@ export async function guardEvents(
   for (const wrapper of enrichedEvents) {
     const safeAutomations = [];
 
-    const eventId =
-      wrapper.event.type === "COMMENT"
-        ? wrapper.event.event.id
-        : (wrapper.event.event as any).messageId;
-    const userId =
-      wrapper.event.type === "COMMENT"
-        ? wrapper.event.event.userId
-        : (wrapper.event.event as any).senderId;
+    let eventId = "";
+    let userId = "";
+
+    if (wrapper.event.type === "COMMENT") {
+      eventId = wrapper.event.event.id;
+      userId = wrapper.event.event.userId;
+    } else if (
+      wrapper.event.type === "STORY_REPLY" ||
+      wrapper.event.type === "QUICK_REPLY"
+    ) {
+      eventId = wrapper.event.event.messageId;
+      userId = wrapper.event.event.senderId;
+    }
 
     for (const automation of wrapper.matchedAutomations) {
       if (eventId) {

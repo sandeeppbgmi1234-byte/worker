@@ -40,3 +40,21 @@ export async function findActiveAutomationsByStory(
     },
   );
 }
+
+export async function findAutomationById(
+  automationId: string,
+): Promise<Result<Automation | null, DatabaseError>> {
+  return executeWithErrorHandling(
+    async () => {
+      const result = await prisma.automation.findUnique({
+        where: { id: automationId },
+      });
+      return result;
+    },
+    {
+      operation: "findAutomationById",
+      model: "Automation",
+      retries: 1,
+    },
+  );
+}

@@ -26,6 +26,10 @@ export const QUICK_REPLIES = {
     TITLE: "Tap to see media 📸",
     PAYLOAD_PREFIX: "SEND_IMAGE_FOR_AUTOMATION:",
   },
+  FOLLOW_CONFIRM: {
+    TITLE: "I'm following ✅",
+    PAYLOAD_PREFIX: "FOLLOW_CONFIRM:",
+  },
 } as const;
 
 export const ERROR_MESSAGES = {

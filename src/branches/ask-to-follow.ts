@@ -21,6 +21,12 @@ export async function executeAskToFollow(
   await checkRateLimits(instagramUserId);
   await incrementApiUsage(instagramUserId, 1);
 
+  // If this is a follow confirmation click, give Meta a moment to update status
+  const isConfirmation = event.text === QUICK_REPLIES.FOLLOW_CONFIRM.TITLE;
+  if (isConfirmation) {
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+
   const commenterId = event.userId || event.senderId;
   const url = buildGraphApiUrl(commenterId);
   url.searchParams.set("fields", "is_user_follow_business");
@@ -80,8 +86,8 @@ export async function executeAskToFollow(
         messaging_type: "RESPONSE",
         access_token: accessToken,
       },
-      timeoutMs: 20000,
-      retries: 2,
+      timeoutMs: 15000,
+      retries: 0, // No retries for DM cards to avoid duplicates
       instagramUserId,
     });
 
@@ -98,6 +104,7 @@ export async function executeAskToFollow(
           access_token: accessToken,
         },
         instagramUserId,
+        retries: 0,
       }).catch(() => {});
     }
 

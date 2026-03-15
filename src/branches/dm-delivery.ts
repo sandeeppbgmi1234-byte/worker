@@ -32,16 +32,6 @@ export async function executeDmDelivery(
   const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
 
   if (automation.replyImage) {
-    const quickReplies =
-      automation.triggerType === "STORY_REPLY"
-        ? [
-            {
-              title: QUICK_REPLIES.BYPASS.TITLE,
-              payload: `${QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX}${automation.id}`,
-            },
-          ]
-        : undefined;
-
     const attachmentBody: any = {
       recipient:
         event.id && automation.triggerType !== "STORY_REPLY"
@@ -60,6 +50,7 @@ export async function executeDmDelivery(
       method: "POST",
       body: attachmentBody,
       instagramUserId,
+      retries: 0,
     });
 
     if (!attachResult.ok) return fail(attachResult.error);
@@ -75,30 +66,12 @@ export async function executeDmDelivery(
   }
 
   if (automation.replyMessage && !isQuickReplyBypass) {
-    const quickReplies = automation.replyImage
-      ? [
-          {
-            title: QUICK_REPLIES.BYPASS.TITLE,
-            payload: `${QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX}${automation.id}`,
-          },
-        ]
-      : undefined;
-
-    let messageContent: any = { text: automation.replyMessage };
-    if (quickReplies) {
-      messageContent.quick_replies = quickReplies.map((qr) => ({
-        content_type: "text",
-        title: qr.title,
-        payload: qr.payload,
-      }));
-    }
-
     const textBody: any = {
       recipient:
         event.id && automation.triggerType !== "STORY_REPLY"
           ? { comment_id: event.id }
           : { id: recipientId },
-      message: messageContent,
+      message: { text: automation.replyMessage },
       messaging_type: "RESPONSE",
       access_token: accessToken,
     };
@@ -107,6 +80,7 @@ export async function executeDmDelivery(
       method: "POST",
       body: textBody,
       instagramUserId,
+      retries: 0,
     });
 
     if (!txtResult.ok) return fail(txtResult.error);

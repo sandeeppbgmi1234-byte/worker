@@ -37,7 +37,7 @@ export async function executeEvents(
           actionType: automation.actionType,
           commentData: wrapper.event.event,
         });
-        continue;
+        break; // Stop further automations for this trigger if gated
       } else if (!askRes.ok) {
         outcomes.push({
           automationId: automation.id,
@@ -101,20 +101,6 @@ export async function executeEvents(
           commentData: wrapper.event.event,
         });
       }
-    }
-
-    if (
-      wrapper.event.type === "QUICK_REPLY" &&
-      wrapper.event.payload.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX)
-    ) {
-      // Direct delivery for bypass payloads (already follow checked or story flow)
-      await executeDmDelivery(
-        wrapper.event.event as any,
-        wrapper.safeAutomations[0],
-        wrapper.accessToken,
-        wrapper.event.instagramUserId,
-        true,
-      );
     }
   }
 

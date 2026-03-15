@@ -118,6 +118,7 @@ export async function filterEvents(
           break;
         }
       }
+      if (matches.length > 0) break; // Dedup: Only one automation per trigger for atomicity
     }
 
     if (matches.length > 0) {

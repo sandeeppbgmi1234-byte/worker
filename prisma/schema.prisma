@@ -16,6 +16,7 @@ model User {
   createdAt    DateTime      @default(now())
   instaAccount InstaAccount?
   automations  Automation[]
+  forms        Form[]
 
   @@map("users")
 }
@@ -74,8 +75,11 @@ model InstaFollowerSnapshot {
 
 // Embedded document for post-based automations
 type PostTarget {
-  id      String
-  caption String?
+  id        String
+  caption   String?
+  mediaUrl  String?
+  permalink String?
+  timestamp String? // ISO timestamp
 }
 
 // Embedded document for story-based automations
@@ -167,4 +171,57 @@ model WebhookEvent {
   @@index([instagramUserId, processed])
   @@index([receivedAt])
   @@map("webhook_events")
+}
+
+// Option for dropdown/checkbox fields
+type FormFieldOption {
+  id    String
+  label String
+}
+
+// One field stored inside a Form document
+type FormFieldEntry {
+  id          String
+  type        String // text | number | email | url | phone | location | country | date | dropdown | checkbox | rating | upload
+  label       String
+  placeholder String?
+  required    Boolean
+  options     FormFieldOption[]
+}
+
+model Form {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String           @default("")
+  coverImage  String?
+  fields      FormFieldEntry[]
+
+  slug            String @unique // 8-char public URL slug
+  status          String @default("DRAFT") // DRAFT | PUBLISHED
+  submissionCount Int    @default(0)
+
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  submissions FormSubmission[]
+
+  @@index([userId, status])
+  @@map("forms")
+}
+
+model FormSubmission {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  formId String @db.ObjectId
+  form   Form   @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  // Keyed by field id — value is string or string[] (for checkbox)
+  answers     Json
+  submittedAt DateTime @default(now())
+  ipAddress   String?
+  userAgent   String?
+
+  @@index([formId, submittedAt(sort: Desc)])
+  @@map("form_submissions")
 }

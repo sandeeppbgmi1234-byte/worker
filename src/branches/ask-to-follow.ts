@@ -37,7 +37,68 @@ export async function executeAskToFollow(
     instagramUserId,
   });
 
-  if (!followerRes.ok) return ok("PROCEED");
+  if (!followerRes.ok) {
+    if (followerRes.error.message.includes("User consent")) {
+      await checkRateLimits(instagramUserId);
+      await incrementApiUsage(instagramUserId, 1);
+
+      const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
+      const consentResult = await fetchFromInstagram<any>(msgUrl.toString(), {
+        method: "POST",
+        body: {
+          recipient: event.id ? { comment_id: event.id } : { id: commenterId },
+          message: {
+            attachment: {
+              type: "template",
+              payload: {
+                template_type: "generic",
+                elements: [
+                  {
+                    title: "Hello! 👋",
+                    subtitle:
+                      "Hi, nice to meet you. Press the button below and we will send you the content ✨.",
+                    buttons: [
+                      {
+                        type: "postback",
+                        title: QUICK_REPLIES.FOLLOW_CONSENT.TITLE,
+                        payload: `${QUICK_REPLIES.FOLLOW_CONSENT.PAYLOAD_PREFIX}${automation.id}`,
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          messaging_type: "RESPONSE",
+          access_token: accessToken,
+        },
+        timeoutMs: 15000,
+        retries: 0,
+        instagramUserId,
+      });
+
+      if (!consentResult.ok) return fail(consentResult.error);
+
+      if (event.id) {
+        const replyUrl = buildGraphApiUrl(ENDPOINTS.REPLY_COMMENT(event.id));
+        await fetchFromInstagram<any>(replyUrl.toString(), {
+          method: "POST",
+          body: {
+            message:
+              "Check your DMs! Please tap 'Send' to get your content. 🚀",
+            access_token: accessToken,
+          },
+          instagramUserId,
+          retries: 0,
+        }).catch(() => {});
+      }
+
+      await clearUserCooldownR(commenterId, automation.id).catch(() => {});
+      return ok("HALT");
+    }
+
+    return ok("PROCEED");
+  }
 
   const isFollowing = followerRes.value?.is_user_follow_business === true;
 

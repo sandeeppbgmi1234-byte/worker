@@ -89,7 +89,8 @@ export function refineEntries(
           msg.message?.quick_reply?.payload || msg.postback?.payload;
         if (
           qrPayload?.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX) ||
-          qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX)
+          qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX) ||
+          qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONSENT.PAYLOAD_PREFIX)
         ) {
           events.push({
             type: "QUICK_REPLY",

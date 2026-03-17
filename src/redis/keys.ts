@@ -1,3 +1,12 @@
+export const TTL = {
+  USER_CONNECTED: 24 * 60 * 60,
+  ACCESS_TOKEN: 2 * 60 * 60,
+  COMMENT_PROCESSED: 24 * 60 * 60,
+  DEFAULT_COOLDOWN: 24 * 60 * 60,
+  API_USAGE: 60 * 60,
+  AUTOMATION_TTL: 24 * 60 * 60,
+} as const;
+
 export const KEYS = {
   USER_CONNECTION: (instagramUserId: string) =>
     `ig:user_connection:${instagramUserId}`,

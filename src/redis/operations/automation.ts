@@ -1,6 +1,5 @@
 import { getRedisClient } from "../client";
-import { KEYS } from "../keys";
-import { TTL } from "../../config/redis.config";
+import { KEYS, TTL } from "../keys";
 import type { Automation } from "@prisma/client";
 
 export async function getAutomationsByPostR(

@@ -1,7 +1,5 @@
 import { getRedisClient } from "../client";
-import { KEYS } from "../keys";
-import { TTL } from "../../config/redis.config";
-import { logger } from "../../logger";
+import { KEYS, TTL } from "../keys";
 
 export async function isCommentProcessedR(
   commentId: string,

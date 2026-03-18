@@ -37,7 +37,7 @@ export function processMessagingEntry(
     if (
       qrPayload?.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX) ||
       qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX) ||
-      qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONSENT.PAYLOAD_PREFIX)
+      qrPayload?.startsWith(QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX)
     ) {
       events.push({
         type: "QUICK_REPLY",

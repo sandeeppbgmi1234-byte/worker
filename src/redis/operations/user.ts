@@ -64,7 +64,7 @@ export async function setUserConnectedR(
 
 export async function invalidateUser(
   instagramUserId: string,
-  clerkId: string,
+  userId: string,
   accountId?: string,
 ): Promise<void> {
   const redis = getRedisClient();
@@ -81,10 +81,11 @@ export async function invalidateUser(
       const [nextCursor, keys] = await redis.scan(
         cursor,
         "MATCH",
-        `ig:automation:${clerkId}:*`,
+        `ig:automation:*:${userId}:*`,
         "COUNT",
         100,
       );
+
       cursor = nextCursor;
       if (keys.length > 0) pipeline.del(...keys);
     } while (cursor !== "0");

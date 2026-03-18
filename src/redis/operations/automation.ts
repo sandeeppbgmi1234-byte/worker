@@ -49,3 +49,27 @@ export async function getAutomationsByStoryR(
     return dbFallback();
   }
 }
+export async function getAutomationByIdR(
+  automationId: string,
+  dbFallback: () => Promise<Automation | null>,
+): Promise<Automation | null> {
+  const redis = getRedisClient();
+  const key = KEYS.AUTOMATION_BY_ID(automationId);
+
+  if (!redis) return dbFallback();
+
+  try {
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+
+    const automation = await dbFallback();
+    if (automation) {
+      redis
+        .set(key, JSON.stringify(automation), "EX", TTL.AUTOMATION_TTL)
+        .catch(() => {});
+    }
+    return automation;
+  } catch (error: any) {
+    return dbFallback();
+  }
+}

@@ -56,12 +56,13 @@ export async function executeAskToFollow(
                   {
                     title: "Hello! 👋",
                     subtitle:
+                      automation.openingMessage ||
                       "Hi, nice to meet you. Press the button below and we will send you the content ✨.",
                     buttons: [
                       {
                         type: "postback",
-                        title: QUICK_REPLIES.FOLLOW_CONSENT.TITLE,
-                        payload: `${QUICK_REPLIES.FOLLOW_CONSENT.PAYLOAD_PREFIX}${automation.id}`,
+                        title: automation.openingButtonText || "Send ✨",
+                        payload: `${QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX}${automation.id}`,
                       },
                     ],
                   },
@@ -109,6 +110,8 @@ export async function executeAskToFollow(
     const profileUrl =
       automation.askToFollowLink ||
       `https://www.instagram.com/${instagramUsername}`;
+
+    console.log(instagramUsername);
 
     await checkRateLimits(instagramUserId);
     await incrementApiUsage(instagramUserId, 1);

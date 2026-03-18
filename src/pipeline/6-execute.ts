@@ -1,9 +1,11 @@
 import { GuardedEvent, ExecutionOutcome } from "../types";
 import { Result, ok } from "../helpers/result";
 import { ExecutionError } from "../errors/pipeline.errors";
-import { executePublicReply } from "../branches/public-reply.ts";
-import { executeAskToFollow } from "../branches/ask-to-follow.ts";
-import { executeDmDelivery } from "../branches/dm-delivery.ts";
+import {
+  executeAskToFollow,
+  executeDmDelivery,
+  executePublicReply,
+} from "@/branches";
 
 export async function executeEvents(
   guardedEvents: GuardedEvent[],

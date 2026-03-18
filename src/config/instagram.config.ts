@@ -30,9 +30,8 @@ export const QUICK_REPLIES = {
     TITLE: "I'm following ✅",
     PAYLOAD_PREFIX: "FOLLOW_CONFIRM:",
   },
-  FOLLOW_CONSENT: {
-    TITLE: "Send ✨",
-    PAYLOAD_PREFIX: "FOLLOW_CONSENT_CONFIRM:",
+  OPENING_MESSAGE: {
+    PAYLOAD_PREFIX: "OPENING_MESSAGE_CLICK:",
   },
 } as const;
 

@@ -2,6 +2,7 @@ import { getAccountByInstagramIdR } from "../redis/operations/user";
 import {
   getAutomationsByPostR,
   getAutomationsByStoryR,
+  getAutomationByIdR,
 } from "../redis/operations/automation";
 import { findInstaAccountByInstagramUserId } from "../repositories/insta-account.repository";
 import {
@@ -72,13 +73,20 @@ export async function filterEvents(
         const automationId = parts[parts.length - 1];
 
         if (automationId) {
-          const automationRes = await findAutomationById(automationId);
-          if (automationRes.ok && automationRes.value) {
+          const automation = await getAutomationByIdR(
+            automationId,
+            async () => {
+              const res = await findAutomationById(automationId);
+              return res.ok ? res.value : null;
+            },
+          );
+
+          if (automation) {
             filtered.push({
               event: eventWrapper,
               accountId: accountResult.id,
               instagramUsername: accountResult.username,
-              matchedAutomations: [automationRes.value],
+              matchedAutomations: [automation],
             });
             continue;
           }

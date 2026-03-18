@@ -1,6 +1,6 @@
 import { ExecutionOutcome } from "../types";
 import { executeTransaction } from "../repositories/repository-utils";
-import { Result, ok, fail } from "../helpers/result";
+import { Result, ok } from "../helpers/result";
 import { PersistenceError } from "../errors/pipeline.errors";
 
 export async function persistOutcomes(

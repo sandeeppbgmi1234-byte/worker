@@ -103,9 +103,8 @@ model Automation {
   story       StoryTarget?
 
   // Trigger configuration
-  triggers  String[] // Keywords/phrases to match
-  matchType String   @default("CONTAINS") // CONTAINS, EXACT, REGEX
-
+  triggers           String[] // Keywords/phrases to match
+  matchType          String   @default("CONTAINS") // CONTAINS, EXACT, REGE
   // Action configuration
   actionType         String // DM | COMMENT_REPLY
   replyMessage       String // Fixed DM message
@@ -116,6 +115,11 @@ model Automation {
   askToFollowEnabled Boolean @default(false)
   askToFollowMessage String? // Message sent when commenter doesn't follow yet
   askToFollowLink    String? // Profile link appended to the Ask to Follow message
+
+  // Opening Message
+  openingMessageEnabled Boolean @default(true)
+  openingMessage        String? // Message sent first (Ice-breaker)
+  openingButtonText     String? // Text for the interactive button
 
   useVariables Boolean @default(true)
 

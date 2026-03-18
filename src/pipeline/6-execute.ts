@@ -4,7 +4,6 @@ import { ExecutionError } from "../errors/pipeline.errors";
 import { executePublicReply } from "../branches/public-reply.ts";
 import { executeAskToFollow } from "../branches/ask-to-follow.ts";
 import { executeDmDelivery } from "../branches/dm-delivery.ts";
-import { QUICK_REPLIES } from "../config/instagram.config";
 
 export async function executeEvents(
   guardedEvents: GuardedEvent[],
@@ -12,16 +11,21 @@ export async function executeEvents(
   const outcomes: ExecutionOutcome[] = [];
 
   for (const wrapper of guardedEvents) {
-    const eventId =
-      wrapper.event.type === "COMMENT"
-        ? wrapper.event.event.id
-        : wrapper.event.type === "STORY_REPLY" ||
-            wrapper.event.type === "QUICK_REPLY"
-          ? wrapper.event.event.messageId
-          : "";
+    let eventId = "";
+    switch (wrapper.event.type) {
+      case "COMMENT":
+        eventId = wrapper.event.event.id;
+        break;
+      case "STORY_REPLY":
+      case "QUICK_REPLY":
+        eventId = wrapper.event.event.messageId;
+        break;
+      default:
+        break;
+    }
 
     for (const automation of wrapper.safeAutomations) {
-      // 1. Ask to follow
+      // 1. Ask to follow gate
       const askRes = await executeAskToFollow(
         wrapper.event.event as any,
         automation,
@@ -29,16 +33,8 @@ export async function executeEvents(
         wrapper.event.instagramUserId,
         wrapper.instagramUsername,
       );
-      if (askRes.ok && askRes.value === "HALT") {
-        outcomes.push({
-          automationId: automation.id,
-          eventId,
-          status: "ASK_TO_FOLLOW_SENT",
-          actionType: automation.actionType,
-          commentData: wrapper.event.event,
-        });
-        break; // Stop further automations for this trigger if gated
-      } else if (!askRes.ok) {
+
+      if (!askRes.ok) {
         outcomes.push({
           automationId: automation.id,
           eventId,
@@ -50,25 +46,39 @@ export async function executeEvents(
         continue;
       }
 
+      if (askRes.value === "HALT") {
+        outcomes.push({
+          automationId: automation.id,
+          eventId,
+          status: "ASK_TO_FOLLOW_SENT",
+          actionType: automation.actionType,
+          commentData: wrapper.event.event,
+        });
+        break; // Stop further automations for this trigger if gated
+      }
+
       // 2. Public Reply (if comment flow)
       let publicReplySuccess = true;
-      if (wrapper.event.type === "COMMENT") {
-        const replyRes = await executePublicReply(
-          wrapper.event.event as any,
-          automation,
-          wrapper.accessToken,
-          wrapper.event.instagramUserId,
-        );
-        if (!replyRes.ok) {
-          publicReplySuccess = false;
-          outcomes.push({
-            automationId: automation.id,
-            eventId,
-            status: "FAILED",
-            errorMessage: replyRes.error.message,
-            actionType: automation.actionType,
-            commentData: wrapper.event.event,
-          });
+      switch (wrapper.event.type) {
+        case "COMMENT": {
+          const replyRes = await executePublicReply(
+            wrapper.event.event as any,
+            automation,
+            wrapper.accessToken,
+            wrapper.event.instagramUserId,
+          );
+          if (!replyRes.ok) {
+            publicReplySuccess = false;
+            outcomes.push({
+              automationId: automation.id,
+              eventId,
+              status: "FAILED",
+              errorMessage: replyRes.error.message,
+              actionType: automation.actionType,
+              commentData: wrapper.event.event,
+            });
+          }
+          break;
         }
       }
 
@@ -81,6 +91,7 @@ export async function executeEvents(
         wrapper.accessToken,
         wrapper.event.instagramUserId,
       );
+
       if (dmRes.ok) {
         outcomes.push({
           automationId: automation.id,
@@ -91,16 +102,18 @@ export async function executeEvents(
           sentMessage: dmRes.value.sentMessage,
           instagramMessageId: dmRes.value.instagramMessageId,
         });
-      } else {
-        outcomes.push({
-          automationId: automation.id,
-          eventId,
-          status: "FAILED",
-          errorMessage: dmRes.error.message,
-          actionType: automation.actionType,
-          commentData: wrapper.event.event,
-        });
+        continue;
       }
+
+      // Handle DM Failure
+      outcomes.push({
+        automationId: automation.id,
+        eventId,
+        status: "FAILED",
+        errorMessage: dmRes.error.message,
+        actionType: automation.actionType,
+        commentData: wrapper.event.event,
+      });
     }
   }
 

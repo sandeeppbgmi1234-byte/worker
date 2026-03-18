@@ -3,10 +3,12 @@ import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl, ENDPOINTS } from "../instagram/endpoints";
 import { fetchFromInstagram } from "../instagram/gateway";
+import { Automation } from "@prisma/client";
+import { CommentData } from "@/types";
 
 export async function executePublicReply(
-  comment: any,
-  automation: any,
+  comment: CommentData,
+  automation: Automation,
   accessToken: string,
   instagramUserId: string,
 ): Promise<Result<void, BaseError>> {

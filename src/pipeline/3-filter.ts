@@ -33,58 +33,69 @@ export async function filterEvents(
 
     let automations: Automation[] = [];
 
-    if (eventWrapper.type === "COMMENT") {
-      const mediaId = eventWrapper.event.mediaId;
-      automations = await getAutomationsByPostR(
-        accountResult.userId,
-        mediaId,
-        async () => {
-          const res = await findActiveAutomationsByPost(
-            accountResult.userId,
-            mediaId,
-          );
-          return res.ok ? res.value : [];
-        },
-      );
-    } else if (eventWrapper.type === "STORY_REPLY") {
-      const storyId = eventWrapper.event.storyId;
-      automations = await getAutomationsByStoryR(
-        accountResult.userId,
-        storyId,
-        async () => {
-          const res = await findActiveAutomationsByStory(
-            accountResult.userId,
-            storyId,
-          );
-          return res.ok ? res.value : [];
-        },
-      );
-    } else if (eventWrapper.type === "QUICK_REPLY") {
-      const payload = eventWrapper.payload;
-      const parts = payload.split(":");
-      const automationId = parts[parts.length - 1];
-
-      if (automationId) {
-        const automationRes = await findAutomationById(automationId);
-        if (automationRes.ok && automationRes.value) {
-          filtered.push({
-            event: eventWrapper,
-            accountId: accountResult.id,
-            instagramUsername: accountResult.username,
-            matchedAutomations: [automationRes.value],
-          });
-          continue;
-        }
+    switch (eventWrapper.type) {
+      case "COMMENT": {
+        const mediaId = eventWrapper.event.mediaId;
+        automations = await getAutomationsByPostR(
+          accountResult.userId,
+          mediaId,
+          async () => {
+            const res = await findActiveAutomationsByPost(
+              accountResult.userId,
+              mediaId,
+            );
+            return res.ok ? res.value : [];
+          },
+        );
+        break;
       }
 
-      // Fallback if no specific automation found for other QRs
-      filtered.push({
-        event: eventWrapper,
-        accountId: accountResult.id,
-        instagramUsername: accountResult.username,
-        matchedAutomations: [],
-      });
-      continue;
+      case "STORY_REPLY": {
+        const storyId = eventWrapper.event.storyId;
+        automations = await getAutomationsByStoryR(
+          accountResult.userId,
+          storyId,
+          async () => {
+            const res = await findActiveAutomationsByStory(
+              accountResult.userId,
+              storyId,
+            );
+            return res.ok ? res.value : [];
+          },
+        );
+        break;
+      }
+
+      case "QUICK_REPLY": {
+        const payload = eventWrapper.payload;
+        const parts = payload.split(":");
+        const automationId = parts[parts.length - 1];
+
+        if (automationId) {
+          const automationRes = await findAutomationById(automationId);
+          if (automationRes.ok && automationRes.value) {
+            filtered.push({
+              event: eventWrapper,
+              accountId: accountResult.id,
+              instagramUsername: accountResult.username,
+              matchedAutomations: [automationRes.value],
+            });
+            continue;
+          }
+        }
+
+        // Fallback if no specific automation found for other QRs
+        filtered.push({
+          event: eventWrapper,
+          accountId: accountResult.id,
+          instagramUsername: accountResult.username,
+          matchedAutomations: [],
+        });
+        continue;
+      }
+
+      default:
+        break;
     }
 
     if (automations.length === 0) continue;

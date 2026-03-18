@@ -50,7 +50,9 @@ export async function isUserConnectedR(
   }
 }
 
-export async function setUserConnected(instagramUserId: string): Promise<void> {
+export async function setUserConnectedR(
+  instagramUserId: string,
+): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 

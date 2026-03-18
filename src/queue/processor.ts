@@ -9,6 +9,7 @@ import {
 import {
   ingestWebhook,
   refineEntries,
+  dedupeEvents,
   filterEvents,
   enrichEvents,
   guardEvents,
@@ -32,7 +33,10 @@ export async function processWebhookJob(job: Job): Promise<void> {
     const refineRes = refineEntries(ingestRes.value);
     if (!refineRes.ok) throw refineRes.error;
 
-    const filterRes = await filterEvents(refineRes.value);
+    const dedupeRes = await dedupeEvents(refineRes.value);
+    if (!dedupeRes.ok) throw dedupeRes.error;
+
+    const filterRes = await filterEvents(dedupeRes.value);
     if (!filterRes.ok) throw filterRes.error;
 
     const enrichRes = await enrichEvents(filterRes.value);

@@ -11,30 +11,21 @@ export async function guardEvents(
 
   for (const wrapper of enrichedEvents) {
     const safeAutomations = [];
-
-    let eventId = "";
     let userId = "";
 
-    if (wrapper.event.type === "COMMENT") {
-      eventId = wrapper.event.event.id;
-      userId = wrapper.event.event.userId;
-    } else if (
-      wrapper.event.type === "STORY_REPLY" ||
-      wrapper.event.type === "QUICK_REPLY"
-    ) {
-      eventId = wrapper.event.event.messageId;
-      userId = wrapper.event.event.senderId;
+    switch (wrapper.event.type) {
+      case "COMMENT":
+        userId = wrapper.event.event.userId;
+        break;
+      case "STORY_REPLY":
+      case "QUICK_REPLY":
+        userId = wrapper.event.event.senderId;
+        break;
+      default:
+        break;
     }
 
     for (const automation of wrapper.matchedAutomations) {
-      if (eventId) {
-        const alreadyProcessed = await isCommentProcessedR(
-          eventId,
-          automation.id,
-        );
-        if (alreadyProcessed) continue;
-      }
-
       if (userId) {
         const onCooldown = await isUserOnCooldownR(userId, automation.id);
         if (onCooldown) continue;

@@ -3,7 +3,7 @@ export { RedisError } from "./errors";
 
 export {
   isUserConnectedR,
-  setUserConnected,
+  setUserConnectedR,
   invalidateUser,
   getAccountByInstagramIdR,
 } from "./operations/user.ts";

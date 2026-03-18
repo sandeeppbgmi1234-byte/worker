@@ -24,4 +24,5 @@ export const KEYS = {
     `ig:automations_post:${userId}:${mediaId}`,
   AUTOMATIONS_BY_STORY: (userId: string, storyId: string) =>
     `ig:automations_story:${userId}:${storyId}`,
+  GLOBAL_EVENT_PROCESSED: (eventId: string) => `ig:global_processed:${eventId}`,
 };

@@ -4,13 +4,13 @@ import {
 } from "../redis/operations/rate-limit";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
-import { QUICK_REPLIES } from "../config/instagram.config";
 import { buildGraphApiUrl } from "../instagram/endpoints";
 import { fetchFromInstagram } from "../instagram/gateway";
+import { Automation } from "@prisma/client";
 
 export async function executeDmDelivery(
   event: any,
-  automation: any,
+  automation: Automation,
   accessToken: string,
   instagramUserId: string,
   isQuickReplyBypass: boolean = false,

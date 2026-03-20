@@ -1,8 +1,8 @@
-import { setupWorker } from "./queue/worker";
 import type { Worker } from "bullmq";
 import { logger } from "./logger";
 import { WORKER_CONFIG } from "./config/worker.config";
 import { aggregateHealthStatus } from "./health";
+import { setupWorker } from "./queue/worker";
 
 const PORT = WORKER_CONFIG.PORT;
 let worker: Worker | null = null;

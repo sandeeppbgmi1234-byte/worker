@@ -1,5 +1,5 @@
 export const WORKER_CONFIG = {
-  PORT: process.env.WORKER_PORT || 8080,
+  PORT: Number(process.env.PORT) || Number(process.env.WORKER_PORT) || 8080,
   QUEUE_NAME: "webhook-processing",
   CONCURRENCY: 1,
   LIMITER: {

@@ -1,5 +1,5 @@
 export const GRAPH_API = {
-  VERSION: "v21.0",
+  VERSION: process.env.INSTAGRAM_API_VERSION,
   BASE_URL: "https://graph.instagram.com",
 } as const;
 

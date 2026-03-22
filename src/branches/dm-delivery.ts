@@ -22,7 +22,10 @@ export async function executeDmDelivery(
   let messageId = null;
 
   const dmCallCount =
-    (automation.replyImage ? 1 : 0) + (automation.replyMessage ? 1 : 0);
+    (automation.replyImage ? 1 : 0) +
+    (automation.replyMessage ? 1 : 0) +
+    (automation.dmLinks && automation.dmLinks.length > 0 ? 1 : 0);
+
   if (dmCallCount === 0 && !isQuickReplyBypass)
     return ok({ sentMessage: "", instagramMessageId: null });
 
@@ -31,6 +34,7 @@ export async function executeDmDelivery(
 
   const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
 
+  // 1. Send Image if present
   if (automation.replyImage) {
     const attachmentBody: any = {
       recipient:
@@ -38,9 +42,10 @@ export async function executeDmDelivery(
           ? { comment_id: event.id }
           : { id: recipientId },
       message: {
-        attachments: [
-          { type: "image", payload: { url: automation.replyImage } },
-        ],
+        attachment: {
+          type: "image",
+          payload: { url: automation.replyImage },
+        },
       },
       messaging_type: "RESPONSE",
       access_token: accessToken,
@@ -56,15 +61,18 @@ export async function executeDmDelivery(
     if (!attachResult.ok) return fail(attachResult.error);
 
     if (automation.triggerType === "STORY_REPLY" && !isQuickReplyBypass) {
-      return ok({
-        sentMessage: "Image Delivery Sent",
-        instagramMessageId: attachResult.value?.message_id,
-      });
+      if (!automation.replyMessage && !automation.dmLinks?.length) {
+        return ok({
+          sentMessage: "Image Delivery Sent",
+          instagramMessageId: attachResult.value?.message_id,
+        });
+      }
     }
 
     await new Promise((r) => setTimeout(r, 1000));
   }
 
+  // 2. Send Text Message if present
   if (automation.replyMessage && !isQuickReplyBypass) {
     const textBody: any = {
       recipient:
@@ -85,10 +93,59 @@ export async function executeDmDelivery(
 
     if (!txtResult.ok) return fail(txtResult.error);
     messageId = txtResult.value?.message_id;
+
+    if (automation.dmLinks && automation.dmLinks.length > 0) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  // 3. Send Links as Generic Template if present (Standard Instagram Link Buttons)
+  if (
+    automation.dmLinks &&
+    automation.dmLinks.length > 0 &&
+    !isQuickReplyBypass
+  ) {
+    const templateBody: any = {
+      recipient:
+        event.id && automation.triggerType !== "STORY_REPLY"
+          ? { comment_id: event.id }
+          : { id: recipientId },
+      message: {
+        attachment: {
+          type: "template",
+          payload: {
+            template_type: "generic",
+            elements: [
+              {
+                title: "Quick Links",
+                buttons: automation.dmLinks.slice(0, 3).map((link) => ({
+                  type: "web_url",
+                  url: link.url,
+                  title: link.title,
+                })),
+              },
+            ],
+          },
+        },
+      },
+      messaging_type: "RESPONSE",
+      access_token: accessToken,
+    };
+
+    const linksResult = await fetchFromInstagram<any>(msgUrl.toString(), {
+      method: "POST",
+      body: templateBody,
+      instagramUserId,
+      retries: 0,
+    });
+
+    if (!linksResult.ok) return fail(linksResult.error);
+    // If text message wasn't sent, use this message ID
+    if (!messageId) messageId = linksResult.value?.message_id;
   }
 
   return ok({
-    sentMessage: automation.replyMessage,
+    sentMessage: automation.replyMessage || "Links sent",
     instagramMessageId: messageId,
   });
 }

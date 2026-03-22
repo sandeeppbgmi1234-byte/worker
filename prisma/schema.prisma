@@ -109,6 +109,7 @@ model Automation {
   actionType         String // DM | COMMENT_REPLY
   replyMessage       String // Fixed DM message
   replyImage         String? // Uploaded image URL for DM
+  dmLinks            DmLink[] // Multiple links for DM
   commentReplyWhenDm String[] @default([]) // Multiple public replies — worker picks one randomly
 
   // Ask to Follow — gate applied before DM delivery
@@ -228,4 +229,9 @@ model FormSubmission {
 
   @@index([formId, submittedAt(sort: Desc)])
   @@map("form_submissions")
+}
+
+type DmLink {
+  title String
+  url   String
 }

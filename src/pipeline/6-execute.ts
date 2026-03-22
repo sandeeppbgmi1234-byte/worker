@@ -5,6 +5,7 @@ import {
   executeAskToFollow,
   executeDmDelivery,
   executePublicReply,
+  executeOpeningMessage,
 } from "@/branches";
 
 export async function executeEvents(
@@ -33,7 +34,6 @@ export async function executeEvents(
         automation,
         wrapper.accessToken,
         wrapper.event.instagramUserId,
-        wrapper.instagramUsername,
       );
 
       if (!askRes.ok) {
@@ -59,34 +59,56 @@ export async function executeEvents(
         break; // Stop further automations for this trigger if gated
       }
 
-      // 2. Public Reply (if comment flow)
-      let publicReplySuccess = true;
-      switch (wrapper.event.type) {
-        case "COMMENT": {
-          const replyRes = await executePublicReply(
+      if (askRes.value === "NEEDS_OPENING_MESSAGE") {
+        if (wrapper.event.type === "STORY_REPLY") {
+          // User already opened 24h window by replying directly. Treat as PROCEED.
+        } else {
+          // Send Opening Message for comments
+          const openRes = await executeOpeningMessage(
             wrapper.event.event as any,
             automation,
             wrapper.accessToken,
             wrapper.event.instagramUserId,
           );
-          if (!replyRes.ok) {
-            publicReplySuccess = false;
-            outcomes.push({
-              automationId: automation.id,
-              eventId,
-              status: "FAILED",
-              errorMessage: replyRes.error.message,
-              actionType: automation.actionType,
-              commentData: wrapper.event.event,
-            });
-          }
-          break;
+
+          outcomes.push({
+            automationId: automation.id,
+            eventId,
+            status: openRes.ok ? "OPENING_MESSAGE_SENT" : "FAILED",
+            errorMessage: openRes.ok ? undefined : openRes.error.message,
+            actionType: automation.actionType,
+            commentData: wrapper.event.event,
+          });
+          break; // Stop automation here, wait for postback
+        }
+      }
+
+      // 2. Public Reply (ONLY for comment flow)
+      // Note: This uses comment_id recipient to send the text notification DM as well.
+      let publicReplySuccess = true;
+      if (wrapper.event.type === "COMMENT") {
+        const replyRes = await executePublicReply(
+          wrapper.event.event as any,
+          automation,
+          wrapper.accessToken,
+          wrapper.event.instagramUserId,
+        );
+        if (!replyRes.ok) {
+          publicReplySuccess = false;
+          outcomes.push({
+            automationId: automation.id,
+            eventId,
+            status: "FAILED",
+            errorMessage: replyRes.error.message,
+            actionType: automation.actionType,
+            commentData: wrapper.event.event,
+          });
         }
       }
 
       if (!publicReplySuccess) continue;
 
-      // 3. DM Delivery
+      // 3. DM Delivery (Template via IGSID)
       const dmRes = await executeDmDelivery(
         wrapper.event.event as any,
         automation,

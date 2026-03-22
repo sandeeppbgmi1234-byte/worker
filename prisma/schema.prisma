@@ -103,8 +103,9 @@ model Automation {
   story       StoryTarget?
 
   // Trigger configuration
-  triggers           String[] // Keywords/phrases to match
-  matchType          String   @default("CONTAINS") // CONTAINS, EXACT, REGE
+  triggers  String[] // Keywords/phrases to match
+  matchType String   @default("CONTAINS") // CONTAINS, EXACT, REGE
+
   // Action configuration
   actionType         String // DM | COMMENT_REPLY
   replyMessage       String // Fixed DM message

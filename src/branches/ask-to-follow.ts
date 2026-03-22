@@ -3,19 +3,25 @@ import {
   checkRateLimits,
   incrementApiUsage,
 } from "../redis/operations/rate-limit";
-import { clearUserCooldownR } from "../redis/operations/cooldown";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
-import { buildGraphApiUrl, ENDPOINTS } from "../instagram/endpoints";
+import { buildGraphApiUrl } from "../instagram/endpoints";
 import { fetchFromInstagram } from "../instagram/gateway";
+import { buildAskToFollowTemplate } from "../templates";
+
+interface AskToFollowEvent {
+  id?: string;
+  userId?: string;
+  senderId?: string;
+  text?: string;
+}
 
 export async function executeAskToFollow(
-  event: any,
+  event: AskToFollowEvent,
   automation: any,
   accessToken: string,
   instagramUserId: string,
-  instagramUsername: string,
-): Promise<Result<"PROCEED" | "HALT", BaseError>> {
+): Promise<Result<"PROCEED" | "HALT" | "NEEDS_OPENING_MESSAGE", BaseError>> {
   if (!automation.askToFollowEnabled) return ok("PROCEED");
 
   await checkRateLimits(instagramUserId);
@@ -28,7 +34,7 @@ export async function executeAskToFollow(
   }
 
   const commenterId = event.userId || event.senderId;
-  const url = buildGraphApiUrl(commenterId);
+  const url = buildGraphApiUrl(commenterId!);
   url.searchParams.set("fields", "is_user_follow_business");
   url.searchParams.set("access_token", accessToken);
 
@@ -39,115 +45,38 @@ export async function executeAskToFollow(
 
   if (!followerRes.ok) {
     if (followerRes.error.message.includes("User consent")) {
-      await checkRateLimits(instagramUserId);
-      await incrementApiUsage(instagramUserId, 1);
-
-      const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
-      const consentResult = await fetchFromInstagram<any>(msgUrl.toString(), {
-        method: "POST",
-        body: {
-          recipient: event.id ? { comment_id: event.id } : { id: commenterId },
-          message: {
-            attachment: {
-              type: "template",
-              payload: {
-                template_type: "generic",
-                elements: [
-                  {
-                    title: "Hello! 👋",
-                    subtitle:
-                      automation.openingMessage ||
-                      "Hi, nice to meet you. Press the button below and we will send you the content ✨.",
-                    buttons: [
-                      {
-                        type: "postback",
-                        title: automation.openingButtonText || "Send ✨",
-                        payload: `${QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX}${automation.id}`,
-                      },
-                    ],
-                  },
-                ],
-              },
-            },
-          },
-          messaging_type: "RESPONSE",
-          access_token: accessToken,
-        },
-        timeoutMs: 15000,
-        retries: 0,
-        instagramUserId,
-      });
-
-      if (!consentResult.ok) return fail(consentResult.error);
-
-      if (event.id) {
-        const replyUrl = buildGraphApiUrl(ENDPOINTS.REPLY_COMMENT(event.id));
-        await fetchFromInstagram<any>(replyUrl.toString(), {
-          method: "POST",
-          body: {
-            message:
-              "Check your DMs! Please tap 'Send' to get your content. 🚀",
-            access_token: accessToken,
-          },
-          instagramUserId,
-          retries: 0,
-        }).catch(() => {});
-      }
-
-      await clearUserCooldownR(commenterId, automation.id).catch(() => {});
-      return ok("HALT");
+      return ok("NEEDS_OPENING_MESSAGE");
     }
-
     return ok("PROCEED");
   }
 
   const isFollowing = followerRes.value?.is_user_follow_business === true;
 
   if (!isFollowing) {
-    const defaultMessage =
-      "Oh no! It seems you're not following me 👀 It would really mean a lot if you visit my profile and hit the follow button 😇. Once you have done that, click on the 'I'm following' button below and you will get the link ✨.";
-    const askMessage = automation.askToFollowMessage || defaultMessage;
     const profileUrl =
-      automation.askToFollowLink ||
-      `https://www.instagram.com/${instagramUsername}`;
-
-    console.log(instagramUsername);
+      automation.askToFollowLink || `https://instagram.com/${instagramUserId}`;
 
     await checkRateLimits(instagramUserId);
     await incrementApiUsage(instagramUserId, 1);
+
+    // ALWAYS use recipient.id (IGSID) for template sends
+    const recipient = { id: commenterId! };
+
+    const templateAttachment = buildAskToFollowTemplate(
+      {
+        askToFollowMessage: automation.askToFollowMessage ?? null,
+        profileUrl,
+      },
+      automation.id,
+    );
 
     const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
     const result = await fetchFromInstagram<any>(msgUrl.toString(), {
       method: "POST",
       body: {
-        recipient: event.id ? { comment_id: event.id } : { id: commenterId },
-        message: {
-          attachment: {
-            type: "template",
-            payload: {
-              template_type: "generic",
-              elements: [
-                {
-                  title: "Follow me first! 🔒",
-                  subtitle: askMessage,
-                  buttons: [
-                    {
-                      type: "web_url",
-                      url: profileUrl,
-                      title: "Visit Profile",
-                    },
-                    {
-                      type: "postback",
-                      title: QUICK_REPLIES.FOLLOW_CONFIRM.TITLE,
-                      payload: `${QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX}${automation.id}`,
-                    },
-                  ],
-                },
-              ],
-            },
-          },
-        },
-        messaging_type: "RESPONSE",
+        recipient,
+        message: { attachment: templateAttachment },
+        messaging_type: "RESPONSE" as const,
         access_token: accessToken,
       },
       timeoutMs: 15000,
@@ -156,24 +85,6 @@ export async function executeAskToFollow(
     });
 
     if (!result.ok) return fail(result.error);
-
-    // 2. Public Reply (if comment flow)
-    if (event.id) {
-      const replyUrl = buildGraphApiUrl(ENDPOINTS.REPLY_COMMENT(event.id));
-      await fetchFromInstagram<any>(replyUrl.toString(), {
-        method: "POST",
-        body: {
-          message:
-            "Check your DMs! Please follow us first to get the content. 🚀",
-          access_token: accessToken,
-        },
-        instagramUserId,
-        retries: 0,
-      }).catch(() => {});
-    }
-
-    await clearUserCooldownR(commenterId, automation.id).catch(() => {});
-
     return ok("HALT");
   }
 

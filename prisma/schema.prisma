@@ -103,12 +103,14 @@ model Automation {
   story       StoryTarget?
 
   // Trigger configuration
-  triggers           String[] // Keywords/phrases to match
-  matchType          String   @default("CONTAINS") // CONTAINS, EXACT, REGE
+  triggers  String[] // Keywords/phrases to match
+  matchType String   @default("CONTAINS") // CONTAINS, EXACT, REGE
+
   // Action configuration
   actionType         String // DM | COMMENT_REPLY
   replyMessage       String // Fixed DM message
   replyImage         String? // Uploaded image URL for DM
+  dmLinks            DmLink[] // Multiple links for DM
   commentReplyWhenDm String[] @default([]) // Multiple public replies — worker picks one randomly
 
   // Ask to Follow — gate applied before DM delivery
@@ -228,4 +230,9 @@ model FormSubmission {
 
   @@index([formId, submittedAt(sort: Desc)])
   @@map("form_submissions")
+}
+
+type DmLink {
+  title String
+  url   String
 }

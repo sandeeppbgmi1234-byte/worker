@@ -6,89 +6,77 @@ import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
 import { fetchFromInstagram } from "../instagram/gateway";
-import { Automation } from "@prisma/client";
+import { buildDmReplyTemplate } from "../templates";
+import type { Automation } from "@prisma/client";
+
+interface DmDeliveryEvent {
+  id?: string; // comment ID (only present for COMMENT triggers)
+  userId?: string; // commenter IG scoped ID
+  senderId?: string; // sender IG scoped ID (for story/messaging)
+}
+
+interface DmDeliveryResult {
+  sentMessage: string;
+  instagramMessageId: string | null;
+}
 
 export async function executeDmDelivery(
-  event: any,
+  event: DmDeliveryEvent,
   automation: Automation,
   accessToken: string,
   instagramUserId: string,
   isQuickReplyBypass: boolean = false,
-): Promise<
-  Result<{ sentMessage: string; instagramMessageId: string | null }, BaseError>
-> {
-  const recipientId = event.userId || event.senderId;
-  let sentMessage = automation.replyMessage || "";
-  let messageId = null;
+): Promise<Result<DmDeliveryResult, BaseError>> {
+  const hasContent =
+    automation.replyImage ||
+    automation.replyMessage ||
+    (automation.dmLinks && automation.dmLinks.length > 0);
 
-  const dmCallCount =
-    (automation.replyImage ? 1 : 0) + (automation.replyMessage ? 1 : 0);
-  if (dmCallCount === 0 && !isQuickReplyBypass)
+  if (!hasContent && !isQuickReplyBypass) {
     return ok({ sentMessage: "", instagramMessageId: null });
+  }
 
   await checkRateLimits(instagramUserId);
-  await incrementApiUsage(instagramUserId, dmCallCount);
+  await incrementApiUsage(instagramUserId, 1); // Always 1 now
+
+  // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
+  // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.
+  // Even though Meta docs don't explicitly show templates with comment_id, it is supported.
+  const recipientId = event.userId || event.senderId;
+  const recipient =
+    event.id && automation.triggerType !== "STORY_REPLY"
+      ? { comment_id: event.id }
+      : { id: recipientId! };
+
+  const templateAttachment = buildDmReplyTemplate({
+    replyMessage: automation.replyMessage,
+    replyImage: automation.replyImage ?? null,
+    dmLinks: automation.dmLinks ?? [],
+  });
 
   const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
 
-  if (automation.replyImage) {
-    const attachmentBody: any = {
-      recipient:
-        event.id && automation.triggerType !== "STORY_REPLY"
-          ? { comment_id: event.id }
-          : { id: recipientId },
-      message: {
-        attachments: [
-          { type: "image", payload: { url: automation.replyImage } },
-        ],
-      },
-      messaging_type: "RESPONSE",
-      access_token: accessToken,
-    };
+  const body = {
+    recipient,
+    message: { attachment: templateAttachment },
+    messaging_type: "RESPONSE" as const,
+    access_token: accessToken,
+  };
 
-    const attachResult = await fetchFromInstagram<any>(msgUrl.toString(), {
+  const result = await fetchFromInstagram<{ message_id?: string }>(
+    msgUrl.toString(),
+    {
       method: "POST",
-      body: attachmentBody,
+      body,
       instagramUserId,
       retries: 0,
-    });
+    },
+  );
 
-    if (!attachResult.ok) return fail(attachResult.error);
-
-    if (automation.triggerType === "STORY_REPLY" && !isQuickReplyBypass) {
-      return ok({
-        sentMessage: "Image Delivery Sent",
-        instagramMessageId: attachResult.value?.message_id,
-      });
-    }
-
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-
-  if (automation.replyMessage && !isQuickReplyBypass) {
-    const textBody: any = {
-      recipient:
-        event.id && automation.triggerType !== "STORY_REPLY"
-          ? { comment_id: event.id }
-          : { id: recipientId },
-      message: { text: automation.replyMessage },
-      messaging_type: "RESPONSE",
-      access_token: accessToken,
-    };
-
-    const txtResult = await fetchFromInstagram<any>(msgUrl.toString(), {
-      method: "POST",
-      body: textBody,
-      instagramUserId,
-      retries: 0,
-    });
-
-    if (!txtResult.ok) return fail(txtResult.error);
-    messageId = txtResult.value?.message_id;
-  }
+  if (!result.ok) return fail(result.error);
 
   return ok({
-    sentMessage: automation.replyMessage,
-    instagramMessageId: messageId,
+    sentMessage: automation.replyMessage || "Template sent",
+    instagramMessageId: result.value?.message_id ?? null,
   });
 }

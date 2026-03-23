@@ -96,7 +96,12 @@ export interface GuardedEvent extends EnrichedEvent {
 export interface ExecutionOutcome {
   automationId: string;
   eventId: string;
-  status: "SUCCESS" | "FAILED" | "ASK_TO_FOLLOW_SENT" | "OPENING_MESSAGE_SENT";
+  status:
+    | "SUCCESS"
+    | "FAILED"
+    | "ASK_TO_FOLLOW_SENT"
+    | "OPENING_MESSAGE_SENT"
+    | "SKIPPED";
   errorMessage?: string;
   sentMessage?: string;
   instagramMessageId?: string | null;

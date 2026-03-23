@@ -48,7 +48,7 @@ export async function executeAskToFollow(
     if (followerRes.error.message.includes("User consent")) {
       return ok("NEEDS_OPENING_MESSAGE");
     }
-    return ok("PROCEED");
+    return fail(followerRes.error);
   }
 
   const isFollowing = followerRes.value?.is_user_follow_business === true;

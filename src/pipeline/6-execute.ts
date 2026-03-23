@@ -128,16 +128,31 @@ export async function executeEvents(
       );
 
       if (dmRes.ok) {
-        outcomes.push({
-          automationId: automation.id,
-          eventId,
-          status: "SUCCESS",
-          actionType: automation.actionType,
-          commentData: wrapper.event.event,
-          sentMessage: dmRes.value.sentMessage,
-          instagramMessageId: dmRes.value.instagramMessageId,
-        });
-        if (userId) await setUserCooldownR(userId, automation.id);
+        const isDelivered =
+          dmRes.value.sentMessage || dmRes.value.instagramMessageId;
+
+        if (isDelivered) {
+          outcomes.push({
+            automationId: automation.id,
+            eventId,
+            status: "SUCCESS",
+            actionType: automation.actionType,
+            commentData: wrapper.event.event,
+            sentMessage: dmRes.value.sentMessage,
+            instagramMessageId: dmRes.value.instagramMessageId,
+          });
+          if (userId) await setUserCooldownR(userId, automation.id);
+        } else {
+          outcomes.push({
+            automationId: automation.id,
+            eventId,
+            status: "SKIPPED",
+            actionType: automation.actionType,
+            commentData: wrapper.event.event,
+            sentMessage: dmRes.value.sentMessage,
+            instagramMessageId: dmRes.value.instagramMessageId,
+          });
+        }
         continue;
       }
 

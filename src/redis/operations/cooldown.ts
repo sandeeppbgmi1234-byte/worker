@@ -8,7 +8,7 @@ export async function isUserThrottledR(
   timeoutSeconds = 10,
 ): Promise<boolean> {
   const redis = getRedisClient();
-  if (!redis) return false;
+  if (!redis) return true;
 
   const key = KEYS.USER_THROTTLE(instagramUserId, automationId);
 
@@ -16,7 +16,8 @@ export async function isUserThrottledR(
     const result = await redis.set(key, "1", "EX", timeoutSeconds, "NX");
     return result === null;
   } catch (error: any) {
-    return false;
+    logger.debug({ error, key }, `isUserThrottledR failed for key=${key}`);
+    return true;
   }
 }
 
@@ -25,7 +26,7 @@ export async function isEventThrottledR(
   timeoutSeconds = 10,
 ): Promise<boolean> {
   const redis = getRedisClient();
-  if (!redis) return false;
+  if (!redis) return true;
 
   const key = KEYS.EVENT_THROTTLE(eventId);
 
@@ -33,7 +34,8 @@ export async function isEventThrottledR(
     const result = await redis.set(key, "1", "EX", timeoutSeconds, "NX");
     return result === null;
   } catch (error: any) {
-    return false;
+    logger.debug({ error, key }, `isEventThrottledR failed for key=${key}`);
+    return true;
   }
 }
 
@@ -55,6 +57,7 @@ export async function isUserOnCooldownR(
     const exists = await redis.exists(key);
     return exists > 0;
   } catch (error: any) {
+    logger.warn({ error, key }, `isUserOnCooldownR failed for key=${key}`);
     return false;
   }
 }
@@ -90,6 +93,7 @@ export async function isPendingConfirmationR(
     const exists = await redis.exists(key);
     return exists > 0;
   } catch (error: any) {
+    logger.warn({ error, key }, `isPendingConfirmationR failed for key=${key}`);
     return false;
   }
 }

@@ -22,13 +22,33 @@ export async function executeOpeningMessage(
   accessToken: string,
   instagramUserId: string,
 ): Promise<Result<"SENT", BaseError>> {
-  await checkRateLimits(instagramUserId);
-  await incrementApiUsage(instagramUserId, 1);
+  try {
+    await checkRateLimits(instagramUserId);
+    await incrementApiUsage(instagramUserId, 1);
+  } catch (error: any) {
+    if (error instanceof BaseError) return fail(error);
+    return fail(
+      new BaseError(
+        "OpeningMessage",
+        error?.message || String(error),
+        {},
+        error,
+      ),
+    );
+  }
 
   // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
   // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.
   // Even though Meta docs don't explicitly show templates with comment_id, it is supported.
   const recipientId = event.userId || event.senderId;
+  if (!event.id && !recipientId) {
+    return fail(
+      new BaseError("OpeningMessage", "No valid recipient identifier found", {
+        event,
+      }),
+    );
+  }
+
   const recipient = event.id ? { comment_id: event.id } : { id: recipientId! };
 
   const templateAttachment = buildOpeningMessageTemplate({

@@ -39,10 +39,14 @@ export async function executeDmDelivery(
   await checkRateLimits(instagramUserId);
   await incrementApiUsage(instagramUserId, 1); // Always 1 now
 
-  // ALWAYS use recipient.id (IGSID) for template sends.
-  // Meta Generic Template docs only support recipient.id, not comment_id.
+  // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
+  // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.
+  // Even though Meta docs don't explicitly show templates with comment_id, it is supported.
   const recipientId = event.userId || event.senderId;
-  const recipient = { id: recipientId! };
+  const recipient =
+    event.id && automation.triggerType !== "STORY_REPLY"
+      ? { comment_id: event.id }
+      : { id: recipientId! };
 
   const templateAttachment = buildDmReplyTemplate({
     replyMessage: automation.replyMessage,

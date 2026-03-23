@@ -21,6 +21,7 @@ export async function executeAskToFollow(
   automation: any,
   accessToken: string,
   instagramUserId: string,
+  instagramUsername: string,
 ): Promise<Result<"PROCEED" | "HALT" | "NEEDS_OPENING_MESSAGE", BaseError>> {
   if (!automation.askToFollowEnabled) return ok("PROCEED");
 
@@ -54,13 +55,18 @@ export async function executeAskToFollow(
 
   if (!isFollowing) {
     const profileUrl =
-      automation.askToFollowLink || `https://instagram.com/${instagramUserId}`;
+      automation.askToFollowLink ||
+      `https://www.instagram.com/${instagramUsername}`;
 
     await checkRateLimits(instagramUserId);
     await incrementApiUsage(instagramUserId, 1);
 
-    // ALWAYS use recipient.id (IGSID) for template sends
-    const recipient = { id: commenterId! };
+    // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
+    // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.
+    // Even though Meta docs don't explicitly show templates with comment_id, it is supported.
+    const recipient = event.id
+      ? { comment_id: event.id }
+      : { id: commenterId! };
 
     const templateAttachment = buildAskToFollowTemplate(
       {

@@ -6,7 +6,11 @@ import {
   executeDmDelivery,
   executePublicReply,
   executeOpeningMessage,
-} from "@/branches";
+} from "../branches";
+import {
+  setUserCooldownR,
+  setPendingConfirmationR,
+} from "../redis/operations/cooldown";
 
 export async function executeEvents(
   guardedEvents: GuardedEvent[],
@@ -15,13 +19,16 @@ export async function executeEvents(
 
   for (const wrapper of guardedEvents) {
     let eventId = "";
+    let userId = "";
     switch (wrapper.event.type) {
       case "COMMENT":
         eventId = wrapper.event.event.id;
+        userId = wrapper.event.event.userId;
         break;
       case "STORY_REPLY":
       case "QUICK_REPLY":
         eventId = wrapper.event.event.messageId;
+        userId = wrapper.event.event.senderId;
         break;
       default:
         break;
@@ -34,6 +41,7 @@ export async function executeEvents(
         automation,
         wrapper.accessToken,
         wrapper.event.instagramUserId,
+        wrapper.instagramUsername,
       );
 
       if (!askRes.ok) {
@@ -56,6 +64,7 @@ export async function executeEvents(
           actionType: automation.actionType,
           commentData: wrapper.event.event,
         });
+        if (userId) await setPendingConfirmationR(userId, automation.id);
         break; // Stop further automations for this trigger if gated
       }
 
@@ -79,6 +88,8 @@ export async function executeEvents(
             actionType: automation.actionType,
             commentData: wrapper.event.event,
           });
+          if (openRes.ok && userId)
+            await setPendingConfirmationR(userId, automation.id);
           break; // Stop automation here, wait for postback
         }
       }
@@ -126,6 +137,7 @@ export async function executeEvents(
           sentMessage: dmRes.value.sentMessage,
           instagramMessageId: dmRes.value.instagramMessageId,
         });
+        if (userId) await setUserCooldownR(userId, automation.id);
         continue;
       }
 

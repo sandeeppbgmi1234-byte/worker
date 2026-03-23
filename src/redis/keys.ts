@@ -14,6 +14,7 @@ export const TTL = {
   INSTAGRAM_DATA: 15 * 60, // 15 minutes
   AUTOMATION_TTL: 24 * 60 * 60, // 24 hours
   PENDING_CONFIRMATION: 5 * 60, // 5 minutes
+  ASK_RESOLVED: 24 * 60 * 60, // 24 hours — closed thread; cleared on new comment
 } as const;
 
 // Key generation functions
@@ -40,6 +41,8 @@ export const KEYS = {
     `ig:cooldown:${instagramUserId}:${automationId}`,
   PENDING_CONFIRMATION: (instagramUserId: string, automationId: string) =>
     `ig:pending:${instagramUserId}:${automationId}`,
+  ASK_RESOLVED: (instagramUserId: string, automationId: string) =>
+    `ig:ask_resolved:${instagramUserId}:${automationId}`,
 
   // Domain: Meta API Rate Limits
   APP_USAGE: () => `ig:rate_limit:app_usage`,

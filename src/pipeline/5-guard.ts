@@ -5,7 +5,9 @@ import {
   isUserThrottledR,
   isPendingConfirmationR,
   isEventThrottledR,
+  isAskResolvedR,
 } from "../redis/operations/cooldown";
+import { QUICK_REPLIES } from "../config/instagram.config";
 import { Result, ok } from "../helpers/result";
 import { GuardError } from "../errors/pipeline.errors";
 
@@ -35,12 +37,30 @@ export async function guardEvents(
         // --- ATOMICITY & SPAM PROTECTION ---
 
         if (wrapper.event.type === "QUICK_REPLY") {
-          // For button clicks, we lock based on the UNIQUE message ID.
-          // This allows users to click the button immediately after a comment (bypassing user lock)
-          // but prevents them from spamming the EXACT same button 10 times in 1s.
-          const eventId = wrapper.event.event.messageId;
-          const throttled = await isEventThrottledR(eventId);
-          if (throttled) continue;
+          const payload = wrapper.event.payload;
+          const isFollowConfirmClick = payload.startsWith(
+            QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX,
+          );
+          const isOpeningMessageClick = payload.startsWith(
+            QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
+          );
+
+          if (isFollowConfirmClick || isOpeningMessageClick) {
+            // Thread already resolved? Drop permanently — no more button clicks entertained.
+            const resolved = await isAskResolvedR(userId, automation.id);
+            if (resolved) continue;
+
+            // Per-user+automation throttle: prevents button spam within a 10s window.
+            // This works because Meta issues a NEW unique messageId per button tap,
+            // making an event-level throttle completely ineffective for postback spam.
+            const throttled = await isUserThrottledR(userId, automation.id);
+            if (throttled) continue;
+          } else {
+            // BYPASS and other QRs use per-event throttle (correct for those flows)
+            const eventId = wrapper.event.event.messageId;
+            const throttled = await isEventThrottledR(eventId);
+            if (throttled) continue;
+          }
         } else {
           // For new triggers (Comments), we lock based on User + Automation ID.
           // This prevents someone from commenting the same trigger 10 times to flood.

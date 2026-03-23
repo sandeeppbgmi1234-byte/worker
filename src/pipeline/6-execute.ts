@@ -10,7 +10,11 @@ import {
 import {
   setUserCooldownR,
   setPendingConfirmationR,
+  setAskResolvedR,
+  clearAskResolvedR,
+  clearPendingConfirmationR,
 } from "../redis/operations/cooldown";
+import { QUICK_REPLIES } from "../config/instagram.config";
 
 export async function executeEvents(
   guardedEvents: GuardedEvent[],
@@ -34,8 +38,30 @@ export async function executeEvents(
         break;
     }
 
+    // Determine if this is a follow-gate button interaction (for routing decisions below)
+    const qrPayload =
+      wrapper.event.type === "QUICK_REPLY" ? wrapper.event.payload : "";
+    const isFollowConfirmFlow = qrPayload.startsWith(
+      QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX,
+    );
+    const isOpeningMessageFlow = qrPayload.startsWith(
+      QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
+    );
+
     for (const automation of wrapper.safeAutomations) {
-      // 1. Ask to follow gate
+      // Each new comment or story reply starts a fresh thread.
+      // Clear any leftover RESOLVED / PENDING state from a previous thread
+      // so the user gets a clean experience without the guard blocking them.
+      if (
+        (wrapper.event.type === "COMMENT" ||
+          wrapper.event.type === "STORY_REPLY") &&
+        userId
+      ) {
+        await clearAskResolvedR(userId, automation.id).catch(() => {});
+        await clearPendingConfirmationR(userId, automation.id).catch(() => {});
+      }
+
+      // 1. Ask-to-follow gate
       const askRes = await executeAskToFollow(
         wrapper.event.event as any,
         automation,
@@ -44,19 +70,31 @@ export async function executeEvents(
         wrapper.instagramUsername,
       );
 
-      if (!askRes.ok) {
+      // Special case: user just clicked the consent button (OPENING_MESSAGE_CLICK).
+      // If the Graph API follower-check still returns a "User consent" error
+      // (Meta's backend hasn't propagated the consent yet — a known race condition),
+      // treat it as PROCEED rather than re-sending the opening message card.
+      // This breaks the infinite consent loop.
+      const resolvedAskRes =
+        isOpeningMessageFlow &&
+        askRes.ok &&
+        askRes.value === "NEEDS_OPENING_MESSAGE"
+          ? ok("PROCEED" as const)
+          : askRes;
+
+      if (!resolvedAskRes.ok) {
         outcomes.push({
           automationId: automation.id,
           eventId,
           status: "FAILED",
-          errorMessage: askRes.error.message,
+          errorMessage: resolvedAskRes.error.message,
           actionType: automation.actionType,
           commentData: wrapper.event.event,
         });
         continue;
       }
 
-      if (askRes.value === "HALT") {
+      if (resolvedAskRes.value === "HALT") {
         outcomes.push({
           automationId: automation.id,
           eventId,
@@ -68,7 +106,7 @@ export async function executeEvents(
         break; // Stop further automations for this trigger if gated
       }
 
-      if (askRes.value === "NEEDS_OPENING_MESSAGE") {
+      if (resolvedAskRes.value === "NEEDS_OPENING_MESSAGE") {
         if (wrapper.event.type === "STORY_REPLY") {
           // User already opened 24h window by replying directly. Treat as PROCEED.
         } else {
@@ -141,7 +179,20 @@ export async function executeEvents(
             sentMessage: dmRes.value.sentMessage,
             instagramMessageId: dmRes.value.instagramMessageId,
           });
-          if (userId) await setUserCooldownR(userId, automation.id);
+
+          if (userId) {
+            // Honour the production comment-spam cooldown (only when env flag is on).
+            // This is unrelated to the ask-to-follow gate.
+            await setUserCooldownR(userId, automation.id);
+
+            // If this delivery completed an ask-to-follow thread (consent or follow confirm),
+            // mark the thread RESOLVED and clear the pending flag.
+            // From this point on, every further button tap is permanently dropped by the guard.
+            if (isFollowConfirmFlow || isOpeningMessageFlow) {
+              await setAskResolvedR(userId, automation.id);
+              await clearPendingConfirmationR(userId, automation.id);
+            }
+          }
         } else {
           outcomes.push({
             automationId: automation.id,

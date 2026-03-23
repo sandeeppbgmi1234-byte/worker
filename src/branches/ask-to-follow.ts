@@ -54,6 +54,10 @@ export async function executeAskToFollow(
   const isFollowing = followerRes.value?.is_user_follow_business === true;
 
   if (!isFollowing) {
+    // If this is a button click ("I'm following") and they STILL haven't followed,
+    // don't re-send the template card. They already have it in their DMs.
+    if (isConfirmation) return ok("HALT");
+
     const profileUrl =
       automation.askToFollowLink ||
       `https://www.instagram.com/${instagramUsername}`;

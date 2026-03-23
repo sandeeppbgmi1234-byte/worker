@@ -2,7 +2,6 @@ import {
   checkRateLimits,
   incrementApiUsage,
 } from "../redis/operations/rate-limit";
-import { clearUserCooldownR } from "../redis/operations/cooldown";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
@@ -73,11 +72,6 @@ export async function executeOpeningMessage(
   });
 
   if (!result.ok) return fail(result.error);
-
-  const commenterId = event.userId || event.senderId;
-  if (commenterId) {
-    await clearUserCooldownR(commenterId, automation.id).catch(() => {});
-  }
 
   return ok("SENT");
 }

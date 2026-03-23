@@ -118,6 +118,75 @@ export async function setPendingConfirmationR(
   }
 }
 
+export async function clearPendingConfirmationR(
+  instagramUserId: string,
+  automationId: string,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const key = KEYS.PENDING_CONFIRMATION(instagramUserId, automationId);
+
+  try {
+    await redis.del(key);
+  } catch (error: any) {
+    logger.warn(
+      { error, key },
+      `clearPendingConfirmationR failed for key=${key}`,
+    );
+  }
+}
+
+export async function isAskResolvedR(
+  instagramUserId: string,
+  automationId: string,
+): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+
+  const key = KEYS.ASK_RESOLVED(instagramUserId, automationId);
+
+  try {
+    const exists = await redis.exists(key);
+    return exists > 0;
+  } catch (error: any) {
+    logger.warn({ error, key }, `isAskResolvedR failed for key=${key}`);
+    return false;
+  }
+}
+
+export async function setAskResolvedR(
+  instagramUserId: string,
+  automationId: string,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const key = KEYS.ASK_RESOLVED(instagramUserId, automationId);
+
+  try {
+    await redis.set(key, "1", "EX", TTL.ASK_RESOLVED);
+  } catch (error: any) {
+    logger.warn({ error, key }, `setAskResolvedR failed for key=${key}`);
+  }
+}
+
+export async function clearAskResolvedR(
+  instagramUserId: string,
+  automationId: string,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const key = KEYS.ASK_RESOLVED(instagramUserId, automationId);
+
+  try {
+    await redis.del(key);
+  } catch (error: any) {
+    logger.warn({ error, key }, `clearAskResolvedR failed for key=${key}`);
+  }
+}
+
 export async function clearUserCooldownR(
   instagramUserId: string,
   automationId: string,

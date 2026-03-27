@@ -48,17 +48,29 @@ export async function executeDmDelivery(
       ? { comment_id: event.id }
       : { id: recipientId! };
 
-  const templateAttachment = buildDmReplyTemplate({
-    replyMessage: automation.replyMessage,
-    replyImage: automation.replyImage ?? null,
-    dmLinks: automation.dmLinks ?? [],
-  });
+  const hasImage = !!automation.replyImage;
+  const hasLinks = !!(
+    automation.dmLinks && (automation.dmLinks as any[]).length > 0
+  );
+
+  let messagePayload: any;
+
+  if (!hasImage && !hasLinks && automation.replyMessage) {
+    messagePayload = { text: automation.replyMessage };
+  } else {
+    const templateAttachment = buildDmReplyTemplate({
+      replyMessage: automation.replyMessage,
+      replyImage: (automation.replyImage as string | null) ?? null,
+      dmLinks: (automation.dmLinks as any[]) ?? [],
+    });
+    messagePayload = { attachment: templateAttachment };
+  }
 
   const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
 
   const body = {
     recipient,
-    message: { attachment: templateAttachment },
+    message: messagePayload,
     messaging_type: "RESPONSE" as const,
     access_token: accessToken,
   };

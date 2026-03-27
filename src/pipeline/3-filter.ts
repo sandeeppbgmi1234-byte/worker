@@ -118,6 +118,12 @@ export async function filterEvents(
     for (const automation of automations) {
       if (!automation.triggers) continue;
 
+      // Handle "Any Keywords" scenario: empty triggers array means all text matches
+      if (automation.triggers.length === 0) {
+        matches.push(automation);
+        break;
+      }
+
       const commentText = textTarget.toLowerCase().trim();
       let isMatch = false;
 

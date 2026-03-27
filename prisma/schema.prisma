@@ -98,14 +98,14 @@ model Automation {
   userId String @db.ObjectId
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  triggerType String       @default("COMMENT_ON_POST") // COMMENT_ON_POST | STORY_REPLY
-  post        PostTarget?
-  story       StoryTarget?
+  triggerType    String       @default("COMMENT_ON_POST") // COMMENT_ON_POST | STORY_REPLY
+  automationName String?
+  post           PostTarget?
+  story          StoryTarget?
 
   // Trigger configuration
-  triggers  String[] // Keywords/phrases to match
-  matchType String   @default("CONTAINS") // CONTAINS, EXACT, REGE
-
+  triggers           String[] // Keywords/phrases to match
+  matchType          String   @default("CONTAINS") // CONTAINS, EXACT, REGE
   // Action configuration
   actionType         String // DM | COMMENT_REPLY
   replyMessage       String // Fixed DM message

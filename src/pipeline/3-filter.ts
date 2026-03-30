@@ -109,21 +109,23 @@ export async function filterEvents(
     if (automations.length === 0) continue;
 
     // Matching
+    // Matching
     const textTarget =
       eventWrapper.type === "COMMENT"
         ? eventWrapper.event.text
         : (eventWrapper.event as any).text;
     const matches: Automation[] = [];
 
-    for (const automation of automations) {
-      if (!automation.triggers) continue;
+    // Prioritize specific keyword matches over "Any Keyword" catch-alls
+    const specificAutomations = automations.filter(
+      (a) => a.triggers && a.triggers.length > 0,
+    );
+    const anyKeywordAutomations = automations.filter(
+      (a) => !a.triggers || a.triggers.length === 0,
+    );
 
-      // Handle "Any Keywords" scenario: empty triggers array means all text matches
-      if (automation.triggers.length === 0) {
-        matches.push(automation);
-        break;
-      }
-
+    // 1. Try specific keyword matches first
+    for (const automation of specificAutomations) {
       const commentText = textTarget.toLowerCase().trim();
       let isMatch = false;
 
@@ -143,7 +145,13 @@ export async function filterEvents(
           break;
         }
       }
-      if (matches.length > 0) break; // Dedup: Only one automation per trigger for atomicity
+      // If we found a specific match, we stop searching for others
+      if (matches.length > 0) break;
+    }
+
+    // 2. If no specific match found, fallback to the first "Any Keyword" automation
+    if (matches.length === 0 && anyKeywordAutomations.length > 0) {
+      matches.push(anyKeywordAutomations[0]);
     }
 
     if (matches.length > 0) {

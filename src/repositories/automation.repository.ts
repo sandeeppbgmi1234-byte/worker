@@ -11,6 +11,7 @@ export async function findActiveAutomationsByPost(
     async () => {
       const result = await prisma.automation.findMany({
         where: { userId, post: { is: { id: postId } }, status: "ACTIVE" },
+        orderBy: { createdAt: "desc" },
       });
       return result;
     },
@@ -30,6 +31,7 @@ export async function findActiveAutomationsByStory(
     async () => {
       const result = await prisma.automation.findMany({
         where: { userId, story: { is: { id: storyId } }, status: "ACTIVE" },
+        orderBy: { createdAt: "desc" },
       });
       return result;
     },

@@ -33,8 +33,8 @@ export async function dedupeEvents(
       if (alreadyHandled) continue;
 
       // 2. Acquire Soft Processing Lock
-      const alreadyProcessing = await acquireEventLockR(eventId);
-      if (alreadyProcessing) continue;
+      const acquiredLock = await acquireEventLockR(eventId);
+      if (!acquiredLock) continue;
     }
 
     uniqueEvents.push(eventWrapper);

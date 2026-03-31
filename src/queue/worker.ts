@@ -12,6 +12,7 @@ export function setupWorker(): Worker {
     removeOnFail: { count: WORKER_CONFIG.RETENTION.FAILED_COUNT },
     stalledInterval: WORKER_CONFIG.STALLED.INTERVAL_MS,
     maxStalledCount: WORKER_CONFIG.STALLED.MAX_COUNT,
+    maxStartedAttempts: WORKER_CONFIG.MAX_RETRIES,
   });
 
   worker.on("completed", (job) => {

@@ -70,12 +70,12 @@ export async function guardEvents(
 
           if (onCooldown) return null;
 
-          // SELF-HEALING: We only block if the event is NOT a fresh trigger.
+          // SELF-HEALING: Block new triggers while a user has a pending interaction (e.g., Follow Gate).
+          // We let QUICK_REPLY through so the user can resolve the state.
           if (
             pending &&
-            wrapper.event.type !== "QUICK_REPLY" &&
-            wrapper.event.type !== "COMMENT" &&
-            wrapper.event.type !== "STORY_REPLY"
+            (wrapper.event.type === "COMMENT" ||
+              wrapper.event.type === "STORY_REPLY")
           ) {
             return null;
           }

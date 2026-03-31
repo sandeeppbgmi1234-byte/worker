@@ -36,10 +36,12 @@ Please update your .env file or deployment environment.
   // Type-specific validations
   const portChecks = ["UPSTASH_REDIS_PORT", "QUEUE_REDIS_PORT"];
   for (const key of portChecks) {
-    const val = Number(process.env[key]);
-    if (isNaN(val)) {
+    const portStr = process.env[key] || "";
+    const val = Number(portStr);
+
+    if (isNaN(val) || !Number.isInteger(val) || val < 1 || val > 65535) {
       throw new Error(
-        `CONFIGURATION ERROR: Environment variable '${key}' must be a valid number.`,
+        `CONFIGURATION ERROR: Environment variable '${key}' must be a valid TCP port (1-65535). Received: '${portStr}'`,
       );
     }
   }

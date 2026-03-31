@@ -57,27 +57,41 @@ async function flushBufferToDb() {
       return;
     }
 
-    // Atomic move of current buffer to a processing list
-    // If PROCESSING_KEY already exists (previous failed flush), we APPEND to it
-    const items = await redis.lrange(
+    // 1. Atomic move of batch to Vault (PROCESSING_KEY)
+    // Using a Lua script to ensure atomicity even for multi-item move
+    const moveScript = `
+      local items = redis.call('lrange', KEYS[1], 0, ARGV[1] - 1)
+      if #items > 0 then
+        redis.call('lpush', KEYS[2], unpack(items))
+        redis.call('ltrim', KEYS[1], #items, -1)
+      end
+      return items
+    `;
+
+    const items = await (redis as any).eval(
+      moveScript,
+      2,
       KEYS.PENDING_OUTCOMES,
-      0,
-      FLUSH_BATCH_SIZE - 1,
+      PROCESSING_KEY,
+      FLUSH_BATCH_SIZE,
     );
+
     if (!items || items.length === 0) {
       isFlushing = false;
       return;
     }
 
     // Process the batch
-    const outcomes = items.map((i) => JSON.parse(i) as ExecutionOutcome);
+    const outcomes = items.map(
+      (i: string) => JSON.parse(i) as ExecutionOutcome,
+    );
 
     // 2. Perform bulk write to DB
     try {
       await prisma.$transaction(async (tx) => {
         // Bulk create executions
         await tx.automationExecution.createMany({
-          data: outcomes.map((o) => ({
+          data: outcomes.map((o: ExecutionOutcome) => ({
             automationId: o.automationId,
             commentId: o.eventId || "unknown_event",
             commentText: o.commentData.text ?? "Interaction",
@@ -94,15 +108,17 @@ async function flushBufferToDb() {
           })),
         });
 
-        // Update automation triggered counts
+        // Update automation triggered counts using a Frequency Map (O(n) instead of O(n^2))
         const successIds = outcomes
-          .filter((o) => o.status === "SUCCESS")
-          .map((o) => o.automationId);
+          .filter((o: ExecutionOutcome) => o.status === "SUCCESS")
+          .map((o: ExecutionOutcome) => o.automationId);
 
-        const uniqueSuccessIds = Array.from(new Set(successIds));
+        const counts: Record<string, number> = {};
+        for (const id of successIds) {
+          counts[id] = (counts[id] || 0) + 1;
+        }
 
-        for (const autoId of uniqueSuccessIds) {
-          const count = successIds.filter((id) => id === autoId).length;
+        for (const [autoId, count] of Object.entries(counts)) {
           await tx.automation.update({
             where: { id: autoId },
             data: {
@@ -113,12 +129,12 @@ async function flushBufferToDb() {
         }
       });
 
-      // 3. Remove the processed items from Redis list AFTER successful DB write
-      await redis.ltrim(KEYS.PENDING_OUTCOMES, items.length, -1);
+      // 3. Clear the Vault AFTER successful DB write
+      await redis.del(PROCESSING_KEY);
 
       logger.info(
         { count: outcomes.length },
-        "Persistence Flusher: Successfully synced outcomes to database",
+        "Persistence Flusher: Successfully synced outcomes to database from vault",
       );
     } catch (dbError: any) {
       logger.error(

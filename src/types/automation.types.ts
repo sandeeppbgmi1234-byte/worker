@@ -11,7 +11,7 @@ export interface CommentData {
 export interface AutomationRule {
   id: string;
   triggers: string[];
-  matchType: "CONTAINS" | "EXACT" | "REGEX";
+  matchType: "CONTAINS" | "EXACT";
   actionType: string;
   replyMessage: string;
   useVariables: boolean;

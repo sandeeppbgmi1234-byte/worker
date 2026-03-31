@@ -3,6 +3,7 @@ import Redis from "ioredis";
 import type { Worker } from "bullmq";
 import { REDIS_CONNECTION, QUEUE_CONNECTION } from "../config/redis.config";
 import type { ServiceHealth } from "./types";
+import { getRedisClient, getQueueRedisClient } from "../redis/client";
 
 export async function checkDatabase(): Promise<ServiceHealth> {
   const start = Date.now();
@@ -21,8 +22,6 @@ export async function checkDatabase(): Promise<ServiceHealth> {
     };
   }
 }
-
-import { getRedisClient, getQueueRedisClient } from "../redis/client";
 
 async function checkRedisInstance(
   name: string,

@@ -30,7 +30,16 @@ export async function persistOutcomes(
 
     // Batch push to Redis list
     pipeline.rpush(KEYS.PENDING_OUTCOMES, ...serializedOutcomes);
-    await pipeline.exec();
+    const results = await pipeline.exec();
+
+    // Verify all pipeline commands succeeded
+    if (results) {
+      for (const [err] of results) {
+        if (err) {
+          throw new Error(`Redis pipeline command failed: ${err.message}`);
+        }
+      }
+    }
 
     // Now that outcomes are safely buffered, mark events as permanently handled
     const uniqueEventIds = Array.from(new Set(outcomes.map((o) => o.eventId)));

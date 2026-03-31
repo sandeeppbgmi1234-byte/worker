@@ -9,11 +9,11 @@ const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
 
-/**
- * Gets the encryption key from environment variable.
- * IMPORTANT: This must match whatever the Next.js app uses.
- */
+let cachedKey: Buffer | null = null;
+
 function getEncryptionKey(): Buffer {
+  if (cachedKey) return cachedKey;
+
   const secret = process.env.REDIS_ENCRYPTION_SECRET;
   if (!secret) {
     throw new Error(
@@ -21,7 +21,8 @@ function getEncryptionKey(): Buffer {
     );
   }
   // We use scrypt to derive a 32-byte key from whatever secret string is provided
-  return scryptSync(secret, "dm-broo-salt", 32);
+  cachedKey = scryptSync(secret, "dm-broo-salt", 32);
+  return cachedKey;
 }
 
 /**
@@ -46,8 +47,20 @@ export function encrypt(text: string): string {
  */
 export function decrypt(encryptedData: string): string {
   const [ivHex, tagHex, encryptedText] = encryptedData.split(":");
+
   if (!ivHex || !tagHex || !encryptedText) {
-    throw new Error("Invalid encrypted data format");
+    throw new Error("Invalid encrypted data format: Missing components");
+  }
+
+  // VALIDATION: Length and Integrity checks
+  if (ivHex.length !== 24 || tagHex.length !== 32) {
+    throw new Error(
+      "Invalid encrypted data format: Corrupted IV or Auth-Tag length",
+    );
+  }
+
+  if (encryptedText.length === 0 || encryptedText.length % 2 !== 0) {
+    throw new Error("Invalid encrypted data format: Invalid ciphertext length");
   }
 
   const key = getEncryptionKey();

@@ -56,13 +56,18 @@ export async function executeEvents(
         const lockKey = `lock:execute:user:${userId}`;
         const redis = getRedisClient();
         if (redis) {
-          const acquired = await redis.set(lockKey, "1", "EX", 30, "NX");
+          const lockToken = Math.random().toString(36).substring(2, 15);
+          const acquired = await redis.set(lockKey, lockToken, "EX", 30, "NX");
           if (acquired !== "OK") {
             logger.info(
               { userId, eventId },
-              "Execution lock held by another thread. Skipping for now.",
+              "Execution lock held by another thread. Flagging for retry.",
             );
-            return []; // Outcome list empty — BullMQ will retry if necessary
+            throw new ExecutionError(
+              "executeEvents",
+              `Execution lock held for user ${userId}`,
+              { userId, eventId },
+            );
           }
           try {
             return await runExecutionFlow(
@@ -73,8 +78,20 @@ export async function executeEvents(
               isOpeningMessageFlow,
             );
           } finally {
-            // RELEASE LOCK
-            await redis.del(lockKey);
+            // RELEASE LOCK ATOMICALLY (Only if we still own it)
+            try {
+              await redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                lockKey,
+                lockToken,
+              );
+            } catch (err) {
+              logger.debug(
+                { lockKey, error: err },
+                "Failed to release lock cleanly",
+              );
+            }
           }
         }
       }
@@ -126,10 +143,7 @@ async function runExecutionFlow(
       // 1. Ask-to-follow gate
       const askToFollowEvent = {
         ...(wrapper.event.event as any),
-        originEventId:
-          wrapper.event.type === "QUICK_REPLY"
-            ? wrapper.event.originEventId
-            : undefined,
+        originEventId: (wrapper.event as any).originEventId || eventId,
       };
 
       const askRes = await executeAskToFollow(
@@ -214,17 +228,8 @@ async function runExecutionFlow(
 
       const [replyRes, dmRes] = await Promise.all([replyPromise, dmPromise]);
 
-      if (!replyRes.ok) {
-        return {
-          automationId: automation.id,
-          eventId,
-          status: "FAILED",
-          errorMessage: replyRes.error.message,
-          actionType: automation.actionType,
-          commentData: wrapper.event.event,
-        } as ExecutionOutcome;
-      }
-
+      // PARTIAL SUCCESS RESILIENCE: Prioritize DM Delivery outcome for Cooldown & State tracking
+      // Informing the user (Public Reply) is a second priority.
       if (dmRes.ok) {
         const isDelivered =
           dmRes.value.sentMessage || dmRes.value.instagramMessageId;
@@ -240,6 +245,17 @@ async function runExecutionFlow(
             }
           }
 
+          if (!replyRes.ok) {
+            logger.warn(
+              {
+                userId,
+                automationId: automation.id,
+                error: replyRes.error.message,
+              },
+              "Partial Success: DM delivered, but Public Reply failed.",
+            );
+          }
+
           return {
             automationId: automation.id,
             eventId,
@@ -248,6 +264,7 @@ async function runExecutionFlow(
             commentData: wrapper.event.event,
             sentMessage: dmRes.value.sentMessage,
             instagramMessageId: dmRes.value.instagramMessageId,
+            errorMessage: !replyRes.ok ? replyRes.error.message : undefined,
           } as ExecutionOutcome;
         }
 
@@ -262,6 +279,7 @@ async function runExecutionFlow(
         } as ExecutionOutcome;
       }
 
+      // If DM Delivery failed, we report the error (regardless of replyRes)
       return {
         automationId: automation.id,
         eventId,

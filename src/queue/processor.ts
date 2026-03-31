@@ -16,6 +16,7 @@ import {
   executeEvents,
   persistOutcomes,
 } from "../pipeline";
+import { WORKER_CONFIG } from "../config/worker.config";
 
 export async function processWebhookJob(job: Job): Promise<void> {
   const payload = job.data as InstagramWebhookPayload;
@@ -68,9 +69,23 @@ export async function processWebhookJob(job: Job): Promise<void> {
       throw new DelayedError();
     }
 
+    const isTerminalError =
+      err instanceof InstagramTokenExpiredError ||
+      err instanceof InstagramSpamPolicyError;
+
+    if (!isTerminalError && job.attemptsMade < WORKER_CONFIG.MAX_RETRIES) {
+      const delayMs = Math.pow(2, job.attemptsMade) * 2000; // 2s, 4s, 8s backoff
+      jobLogger.warn(
+        { error: err.message, attempt: job.attemptsMade + 1, delayMs },
+        "Retriable error occurred. Moving job to delayed queue for backoff.",
+      );
+      await job.moveToDelayed(Date.now() + delayMs, "General Failure Backoff");
+      throw new DelayedError();
+    }
+
     jobLogger.error(
       { type: err?.name || typeof err, message: err?.message || String(err) },
-      "Unhandled error during webhook processing",
+      "Job failed ultimately after max retries or terminal error",
     );
     throw err;
   }

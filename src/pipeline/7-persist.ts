@@ -1,6 +1,6 @@
 import { ExecutionOutcome } from "../types";
 import { executeTransaction } from "../repositories/repository-utils";
-import { Result, ok } from "../helpers/result";
+import { Result, ok, fail } from "../helpers/result";
 import { PersistenceError } from "../errors/pipeline.errors";
 import { getRedisClient } from "../redis/client";
 import { KEYS } from "../redis/keys";
@@ -52,6 +52,9 @@ export async function persistOutcomes(
 async function persistOutcomesSync(
   outcomes: ExecutionOutcome[],
 ): Promise<Result<void, PersistenceError>> {
+  let hasFailure = false;
+  let lastError: any = null;
+
   for (const outcome of outcomes) {
     try {
       await executeTransaction(
@@ -98,7 +101,28 @@ async function persistOutcomesSync(
           models: ["AutomationExecution", "Automation"],
         },
       );
-    } catch (ignore) {}
+    } catch (error: any) {
+      hasFailure = true;
+      lastError = error;
+      logger.error(
+        {
+          automationId: outcome.automationId,
+          eventId: outcome.eventId,
+          error: error.message,
+        },
+        "CRITICAL PERSISTENCE FAILURE: Both Redis buffer and Synchronous DB fallback failed. Flagging for job retry.",
+      );
+    }
   }
+
+  if (hasFailure) {
+    return fail(
+      new PersistenceError(
+        `Failed to persist ${outcomes.length} outcomes in sync fallback.`,
+        lastError,
+      ),
+    );
+  }
+
   return ok(undefined);
 }

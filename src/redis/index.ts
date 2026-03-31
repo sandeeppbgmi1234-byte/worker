@@ -4,7 +4,6 @@ export { RedisError } from "./errors";
 export {
   isUserConnectedR,
   setUserConnectedR,
-  invalidateUser,
   getAccountByInstagramIdR,
 } from "./operations/user.ts";
 export { getAccessTokenR, cacheAccessTokenR } from "./operations/token.ts";

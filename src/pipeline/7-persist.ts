@@ -2,8 +2,48 @@ import { ExecutionOutcome } from "../types";
 import { executeTransaction } from "../repositories/repository-utils";
 import { Result, ok } from "../helpers/result";
 import { PersistenceError } from "../errors/pipeline.errors";
+import { getRedisClient } from "../redis/client";
+import { KEYS } from "../redis/keys";
+import { logger } from "../logger";
 
+/**
+ * Persists execution outcomes by pushing them to a Redis buffer (Write-Behind).
+ * If Redis is down, it falls back to synchronous DB persistence to prevent data loss.
+ */
 export async function persistOutcomes(
+  outcomes: ExecutionOutcome[],
+): Promise<Result<void, PersistenceError>> {
+  const redis = getRedisClient();
+
+  if (!redis) {
+    logger.warn(
+      "Redis client not available for buffering. Falling back to synchronous DB persistence.",
+    );
+    return persistOutcomesSync(outcomes);
+  }
+
+  try {
+    const pipeline = redis.pipeline();
+    const serializedOutcomes = outcomes.map((o) => JSON.stringify(o));
+
+    // Batch push to Redis list
+    pipeline.rpush(KEYS.PENDING_OUTCOMES, ...serializedOutcomes);
+    await pipeline.exec();
+
+    return ok(undefined);
+  } catch (error: any) {
+    logger.error(
+      { error: error.message },
+      "Failed to buffer outcomes in Redis. Falling back to synchronous DB.",
+    );
+    return persistOutcomesSync(outcomes);
+  }
+}
+
+/**
+ * Original synchronous persistence logic — now used as a failsafe
+ */
+async function persistOutcomesSync(
   outcomes: ExecutionOutcome[],
 ): Promise<Result<void, PersistenceError>> {
   for (const outcome of outcomes) {
@@ -43,14 +83,11 @@ export async function persistOutcomes(
           }
         },
         {
-          operation: "persistPipelineOutcome",
+          operation: "persistPipelineOutcomeSync",
           models: ["AutomationExecution", "Automation"],
         },
       );
-    } catch (dbError) {
-      continue; // Move on if constraint error
-    }
+    } catch (ignore) {}
   }
-
   return ok(undefined);
 }

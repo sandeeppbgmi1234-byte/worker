@@ -12,7 +12,6 @@ import {
 } from "../repositories/automation.repository";
 import { RefinedEvent, FilteredEvent } from "../types";
 import { Automation } from "@prisma/client";
-import { safeRegexMatch } from "../helpers/safe-regex";
 import { Result, ok } from "../helpers/result";
 import { FilterError } from "../errors/pipeline.errors";
 
@@ -69,8 +68,9 @@ export async function filterEvents(
 
       case "QUICK_REPLY": {
         const payload = eventWrapper.payload;
-        const parts = payload.split(":");
-        const automationId = parts[parts.length - 1];
+        const lastColonIndex = payload.lastIndexOf(":");
+        const automationId =
+          lastColonIndex !== -1 ? payload.substring(lastColonIndex + 1) : "";
 
         if (automationId) {
           const automation = await getAutomationByIdR(
@@ -136,8 +136,6 @@ export async function filterEvents(
           isMatch = commentText.includes(triggerLower);
         else if (automation.matchType === "EXACT")
           isMatch = commentText === triggerLower;
-        else if (automation.matchType === "REGEX")
-          isMatch = await safeRegexMatch(trigger, textTarget, "i");
         else isMatch = commentText.includes(triggerLower);
 
         if (isMatch) {

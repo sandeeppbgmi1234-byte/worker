@@ -22,22 +22,24 @@ export async function checkDatabase(): Promise<ServiceHealth> {
   }
 }
 
-async function checkRedis(
-  connection: any,
+import { getRedisClient, getQueueRedisClient } from "../redis/client";
+
+async function checkRedisInstance(
   name: string,
+  clientGetter: () => any,
 ): Promise<ServiceHealth> {
   const start = Date.now();
-  // Using a separate client instance for health checks
-  const redis = new Redis({
-    ...connection,
-    connectTimeout: 2000,
-    lazyConnect: true,
-  });
+  const redis = clientGetter();
+  if (!redis) {
+    return {
+      status: "DOWN",
+      details: { error: "Redis client not initialized", serviceName: name },
+    };
+  }
 
   try {
-    await redis.connect();
-    await redis.ping();
-    await redis.quit();
+    const res = await redis.ping();
+    if (res !== "PONG") throw new Error("Recieved unexpected ping response");
     return {
       status: "UP",
       latency: Date.now() - start,
@@ -46,7 +48,7 @@ async function checkRedis(
     return {
       status: "DOWN",
       details: {
-        error: error instanceof Error ? error.message : "Connect failed",
+        error: error instanceof Error ? error.message : "Ping failed",
         serviceName: name,
       },
     };
@@ -54,11 +56,11 @@ async function checkRedis(
 }
 
 export async function checkUpstashRedis(): Promise<ServiceHealth> {
-  return checkRedis(REDIS_CONNECTION, "Upstash (Caching)");
+  return checkRedisInstance("Upstash (Caching)", getRedisClient);
 }
 
 export async function checkQueueRedis(): Promise<ServiceHealth> {
-  return checkRedis(QUEUE_CONNECTION, "Queue (BullMQ)");
+  return checkRedisInstance("Queue (BullMQ)", getQueueRedisClient);
 }
 
 export async function checkBullMQWorker(

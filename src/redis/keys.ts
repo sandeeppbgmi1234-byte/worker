@@ -63,4 +63,11 @@ export const KEYS = {
   INSTAGRAM_POSTS: (instagramUserId: string) => `ig:posts:${instagramUserId}`,
   INSTAGRAM_STORIES: (instagramUserId: string) =>
     `ig:stories:${instagramUserId}`,
+
+  // Domain: Predicted Metrics
+  PREDICTED_USAGE: (instagramUserId: string) =>
+    `ig:rate_limit:predicted:${instagramUserId}`,
+
+  // Domain: Buffers (Async Persistence)
+  PENDING_OUTCOMES: "pending:outcomes:buffer",
 } as const;

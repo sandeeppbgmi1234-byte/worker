@@ -61,35 +61,3 @@ export async function setUserConnectedR(
     await redis.set(key, "1", "EX", TTL.USER_CONNECTED);
   } catch (error: any) {}
 }
-
-export async function invalidateUser(
-  instagramUserId: string,
-  userId: string,
-  accountId?: string,
-): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-
-  try {
-    const pipeline = redis.pipeline();
-    pipeline.del(KEYS.USER_CONNECTION(instagramUserId));
-
-    if (accountId) pipeline.del(KEYS.ACCESS_TOKEN(accountId));
-
-    let cursor = "0";
-    do {
-      const [nextCursor, keys] = await redis.scan(
-        cursor,
-        "MATCH",
-        `ig:automation:*:${userId}:*`,
-        "COUNT",
-        100,
-      );
-
-      cursor = nextCursor;
-      if (keys.length > 0) pipeline.del(...keys);
-    } while (cursor !== "0");
-
-    await pipeline.exec();
-  } catch (error: any) {}
-}

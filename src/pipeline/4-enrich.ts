@@ -7,22 +7,25 @@ import { EnrichmentError } from "../errors/pipeline.errors";
 export async function enrichEvents(
   filteredEvents: FilteredEvent[],
 ): Promise<Result<EnrichedEvent[], EnrichmentError>> {
-  const enriched: EnrichedEvent[] = [];
+  const enrichResults = await Promise.all(
+    filteredEvents.map(async (item) => {
+      try {
+        const accessToken = await getAccessTokenR(item.accountId, () =>
+          getValidAccessToken(item.accountId),
+        );
+        return {
+          ...item,
+          accessToken,
+        };
+      } catch (e) {
+        // Missing token prevents this event from proceeding
+        return null;
+      }
+    }),
+  );
 
-  for (const item of filteredEvents) {
-    try {
-      const accessToken = await getAccessTokenR(item.accountId, () =>
-        getValidAccessToken(item.accountId),
-      );
-      enriched.push({
-        ...item,
-        accessToken,
-      });
-    } catch (e) {
-      // Missing token prevents this event from proceeding but other events can proceed
-      continue;
-    }
-  }
-
+  const enriched = enrichResults.filter(
+    (item): item is EnrichedEvent => item !== null,
+  );
   return ok(enriched);
 }

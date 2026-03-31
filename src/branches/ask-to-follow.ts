@@ -1,5 +1,9 @@
 import { QUICK_REPLIES } from "../config/instagram.config";
 import {
+  isFollowWarningSentR,
+  setFollowWarningSentR,
+} from "../redis/operations/cooldown";
+import {
   checkRateLimits,
   incrementApiUsage,
 } from "../redis/operations/rate-limit";
@@ -55,8 +59,16 @@ export async function executeAskToFollow(
 
   if (!isFollowing) {
     // If this is a button click ("I'm following") and they STILL haven't followed,
-    // don't re-send the template card. They already have it in their DMs.
-    if (isConfirmation) return ok("HALT");
+    // we give them ONE warning (re-resend the card). If they spam after that, we HALT.
+    if (isConfirmation) {
+      const alreadyWarned = await isFollowWarningSentR(
+        commenterId!,
+        automation.id,
+      );
+      if (alreadyWarned) return ok("HALT");
+
+      await setFollowWarningSentR(commenterId!, automation.id);
+    }
 
     const profileUrl =
       automation.askToFollowLink ||

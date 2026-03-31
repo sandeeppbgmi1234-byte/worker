@@ -8,10 +8,6 @@ export function setupWorker(): Worker {
   const worker = new Worker(WORKER_CONFIG.QUEUE_NAME, processWebhookJob, {
     connection: QUEUE_CONNECTION,
     concurrency: WORKER_CONFIG.CONCURRENCY,
-    limiter: {
-      max: WORKER_CONFIG.LIMITER.MAX_JOBS,
-      duration: WORKER_CONFIG.LIMITER.DURATION_MS,
-    },
     removeOnComplete: { count: WORKER_CONFIG.RETENTION.COMPLETED_COUNT },
     removeOnFail: { count: WORKER_CONFIG.RETENTION.FAILED_COUNT },
     stalledInterval: WORKER_CONFIG.STALLED.INTERVAL_MS,

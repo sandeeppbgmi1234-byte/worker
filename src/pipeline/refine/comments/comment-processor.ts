@@ -17,8 +17,10 @@ export function processCommentChanges(
     if (change.field === "comments") {
       const commentData = change.value;
 
-      // 1. Noise Filter: Skips self-comments to prevent infinite automation loops
-      if (commentData.from?.self_ig_scoped_id) continue;
+      // 1. Noise Filter: Skips self-comments and replies
+      // Replies to other users' comments have parent_id and should not trigger automations
+      if (commentData.from?.self_ig_scoped_id || commentData.parent_id)
+        continue;
 
       const timestamp = commentData.timestamp || entry.time;
       const mediaId = commentData.media?.id || commentData.media_id;

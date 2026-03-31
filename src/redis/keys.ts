@@ -28,6 +28,7 @@ export const KEYS = {
 
   // Domain: Tokens
   ACCESS_TOKEN: (accountId: string) => `ig:access_token:${accountId}`,
+  TOKEN_REFRESH_LOCK: (accountId: string) => `lock:refresh:token:${accountId}`,
 
   // Domain: Comments / Idempotency (Worker)
   COMMENT_PROCESSED: (commentId: string, automationId: string) =>

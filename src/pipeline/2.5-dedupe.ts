@@ -1,5 +1,5 @@
 import { RefinedEvent } from "../types";
-import { isEventHandledR } from "../redis/operations/event";
+import { acquireEventLockR, isEventHandledR } from "../redis/operations/event";
 import { Result, ok } from "../helpers/result";
 import { GuardError } from "../errors/pipeline.errors";
 
@@ -28,11 +28,13 @@ export async function dedupeEvents(
     }
 
     if (eventId) {
+      // 1. Check Permanent Handled Mark
       const alreadyHandled = await isEventHandledR(eventId);
-      if (alreadyHandled) {
-        // Log event as duplicate and skip
-        continue;
-      }
+      if (alreadyHandled) continue;
+
+      // 2. Acquire Soft Processing Lock
+      const alreadyProcessing = await acquireEventLockR(eventId);
+      if (alreadyProcessing) continue;
     }
 
     uniqueEvents.push(eventWrapper);

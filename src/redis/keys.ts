@@ -44,8 +44,11 @@ export const KEYS = {
     `ig:pending:${instagramUserId}:${automationId}`,
   ASK_RESOLVED: (instagramUserId: string, automationId: string) =>
     `ig:ask_resolved:${instagramUserId}:${automationId}`,
-  FOLLOW_WARNING: (commenterId: string, automationId: string) =>
-    `ig:warn:follow:${commenterId}:${automationId}`,
+  FOLLOW_WARNING: (
+    commenterId: string,
+    automationId: string,
+    originEventId: string,
+  ) => `ig:warn:follow:${commenterId}:${automationId}:${originEventId}`,
 
   // Domain: Meta API Rate Limits
   APP_USAGE: () => `ig:rate_limit:app_usage`,

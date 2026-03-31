@@ -68,9 +68,12 @@ export async function filterEvents(
 
       case "QUICK_REPLY": {
         const payload = eventWrapper.payload;
-        const lastColonIndex = payload.lastIndexOf(":");
-        const automationId =
-          lastColonIndex !== -1 ? payload.substring(lastColonIndex + 1) : "";
+        const parts = payload.split(":");
+        // Payload format: PREFIX:automationId:originEventId
+        const automationId = parts[1] || "";
+        const originEventId = parts[2] || "";
+
+        eventWrapper.originEventId = originEventId;
 
         if (automationId) {
           const automation = await getAutomationByIdR(

@@ -205,10 +205,11 @@ export async function clearUserCooldownR(
 export async function isFollowWarningSentR(
   commenterId: string,
   automationId: string,
+  originEventId: string,
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return false;
-  const key = KEYS.FOLLOW_WARNING(commenterId, automationId);
+  const key = KEYS.FOLLOW_WARNING(commenterId, automationId, originEventId);
   try {
     const exists = await redis.exists(key);
     return exists > 0;
@@ -221,10 +222,11 @@ export async function isFollowWarningSentR(
 export async function setFollowWarningSentR(
   commenterId: string,
   automationId: string,
+  originEventId: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
-  const key = KEYS.FOLLOW_WARNING(commenterId, automationId);
+  const key = KEYS.FOLLOW_WARNING(commenterId, automationId, originEventId);
   try {
     await redis.set(key, "1", "EX", TTL.FOLLOW_WARNING);
   } catch (error: any) {

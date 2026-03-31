@@ -11,6 +11,7 @@ const DEFAULT_ASK_TO_FOLLOW_MESSAGE =
 export function buildAskToFollowTemplate(
   input: AskToFollowTemplateInput,
   automationId: string,
+  originEventId: string,
 ): MetaAttachment {
   const text = input.askToFollowMessage || DEFAULT_ASK_TO_FOLLOW_MESSAGE;
 
@@ -23,7 +24,7 @@ export function buildAskToFollowTemplate(
     {
       type: "postback",
       title: QUICK_REPLIES.FOLLOW_CONFIRM.TITLE,
-      payload: `${QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX}${automationId}`,
+      payload: `${QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX}${automationId}:${originEventId}`,
     },
   ];
 

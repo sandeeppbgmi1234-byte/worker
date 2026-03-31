@@ -13,8 +13,10 @@ import {
   setAskResolvedR,
   clearAskResolvedR,
   clearPendingConfirmationR,
+  isPendingConfirmationR,
 } from "../redis/operations/cooldown";
 import { QUICK_REPLIES } from "../config/instagram.config";
+import { logger } from "../logger";
 
 export async function executeEvents(
   guardedEvents: GuardedEvent[],
@@ -49,7 +51,7 @@ export async function executeEvents(
     );
 
     for (const automation of wrapper.safeAutomations) {
-      // Each new comment or story reply starts a fresh thread.
+      // 0. SELF-HEALING: Each new comment or story reply starts a fresh thread.
       // Clear any leftover RESOLVED / PENDING state from a previous thread
       // so the user gets a clean experience without the guard blocking them.
       if (
@@ -57,13 +59,30 @@ export async function executeEvents(
           wrapper.event.type === "STORY_REPLY") &&
         userId
       ) {
-        await clearAskResolvedR(userId, automation.id).catch(() => {});
-        await clearPendingConfirmationR(userId, automation.id).catch(() => {});
+        // We do this via the flusher or direct calls; if they fail, the Guard's
+        // new pre-emption logic (Last-In Wins) ensures the user isn't stuck.
+        await Promise.all([
+          clearAskResolvedR(userId, automation.id),
+          clearPendingConfirmationR(userId, automation.id),
+        ]).catch((err) => {
+          logger.debug(
+            { userId, automationId: automation.id, error: err.message },
+            "Self-healing: Failed to clear old states, but proceeding (Guard will handle)",
+          );
+        });
       }
 
       // 1. Ask-to-follow gate
+      const askToFollowEvent = {
+        ...(wrapper.event.event as any),
+        originEventId:
+          wrapper.event.type === "QUICK_REPLY"
+            ? wrapper.event.originEventId
+            : undefined,
+      };
+
       const askRes = await executeAskToFollow(
-        wrapper.event.event as any,
+        askToFollowEvent,
         automation,
         wrapper.accessToken,
         wrapper.event.instagramUserId,

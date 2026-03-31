@@ -72,8 +72,17 @@ export async function guardEvents(
         if (onCooldown) continue;
 
         // Prevent overlapping gates (waiting for follow/consent click)
+        // SELF-HEALING: We only block if the event is NOT a fresh trigger (e.g. another button click).
+        // Fresh triggers (Comments/Story Replies) should always be allowed to pre-empt an old stuck state.
         const pending = await isPendingConfirmationR(userId, automation.id);
-        if (pending && wrapper.event.type !== "QUICK_REPLY") continue;
+        if (
+          pending &&
+          wrapper.event.type !== "QUICK_REPLY" &&
+          wrapper.event.type !== "COMMENT" &&
+          wrapper.event.type !== "STORY_REPLY"
+        ) {
+          continue;
+        }
       }
 
       safeAutomations.push(automation);

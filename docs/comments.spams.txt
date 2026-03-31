@@ -1,0 +1,28 @@
+We have deployed a multi-layered defense architecture specifically to handle Instagram comment spam and prevent automated loops. These mechanisms act at different stages of the processing pipeline:
+
+1. The Refinery Layer (Earliest Rejection)
+This is the "First Filter" where we discard purely invalid or noisy data before it even reaches the logic.
+
+Self-Comment Filter: We immediately drop any comment where the sender is the Instagram account itself (self_ig_scoped_id). This is critical for preventing Infinite Automation Loops (where the bot's own reply triggers another reply).
+Reply-Only Rejection: As per the recent fix, we now drop any comment that has a parent_id. This ensures that only top-level comments on a post can trigger an automation, ignoring all threaded replies.
+2. The Deduplication Phase
+Event ID Deduper: Built into
+
+2.5-dedupe.ts
+, this uses Redis to remember every unique webhook_id and comment_id for a short period. If Meta sends the same webhook multiple times (common during spikes), the duplicates are discarded.
+3. The Guard Phase (The "Smart" Defense)
+This is where the user behavior is analyzed in
+
+src/pipeline/5-guard.ts
+ using Redis locks:
+
+Atomic User Throttling: A per-user + per-automation lock. If a user sends 10 comments in 2 seconds (like your "Hxhdheh..." example), only the first one is allowed through; the others are "Cleanly Dropped" by the throttler.
+Production Cooldowns: After a successful DM is delivered, the user is placed on a cooldown (usually 10-60 minutes). Any further comments during this window are silently ignored.
+Pending Confirmation Gate: If an automation requires a "Consent" or "Follow" button click, we set a PENDING flag. While this flag is active, we ignore all new comment triggers from that user to avoid sending multiple "Click button" cards.
+Ask Resolved Check: Once a "Consent/Gating" flow is finished or timed out, we permanently block that specific thread trigger to prevent users from re-triggering it via old messages.
+4. Integration & Rate Limit Defense
+Instagram Spam Error Catching: In
+
+src/instagram/gateway.ts
+, if Meta returns an error indicating "Spam" or "Action Blocked," the worker immediately fails the job and logs a warning. This prevents the system from blindly retrying and risking a permanent ban.
+Meta Rate-Limit Backoff: If we hit a Meta API rate limit, the worker dynamically delays future jobs for 5–10 minutes to let the account "cool down" in Meta's eyes.

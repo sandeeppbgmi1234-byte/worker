@@ -202,3 +202,32 @@ export async function clearUserCooldownR(
     logger.warn({ error, key }, `clearUserCooldownR failed for key=${key}`);
   }
 }
+export async function isFollowWarningSentR(
+  commenterId: string,
+  automationId: string,
+): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+  const key = KEYS.FOLLOW_WARNING(commenterId, automationId);
+  try {
+    const exists = await redis.exists(key);
+    return exists > 0;
+  } catch (error: any) {
+    logger.warn({ error, key }, `isFollowWarningSentR failed for key=${key}`);
+    return false;
+  }
+}
+
+export async function setFollowWarningSentR(
+  commenterId: string,
+  automationId: string,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const key = KEYS.FOLLOW_WARNING(commenterId, automationId);
+  try {
+    await redis.set(key, "1", "EX", TTL.FOLLOW_WARNING);
+  } catch (error: any) {
+    logger.warn({ error, key }, `setFollowWarningSentR failed for key=${key}`);
+  }
+}

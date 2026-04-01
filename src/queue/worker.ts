@@ -12,6 +12,7 @@ export function setupWorker(): Worker {
     removeOnFail: { count: WORKER_CONFIG.RETENTION.FAILED_COUNT },
     stalledInterval: WORKER_CONFIG.STALLED.INTERVAL_MS,
     maxStalledCount: WORKER_CONFIG.STALLED.MAX_COUNT,
+    maxStartedAttempts: WORKER_CONFIG.MAX_RETRIES,
   });
 
   worker.on("completed", (job) => {
@@ -19,8 +20,14 @@ export function setupWorker(): Worker {
   });
 
   worker.on("failed", (job, err) => {
-    if (err.message === "DelayedError") return;
-    logger.error(`Job ${job?.id} failed ultimately: ${err.message}`);
+    if (err.name === "DelayedError" || err.message === "DelayedError") {
+      logger.info({ jobId: job?.id }, `Job delayed for rate limit backoff`);
+      return;
+    }
+    logger.error(
+      { jobId: job?.id, error: err.message },
+      `Job failed ultimately`,
+    );
   });
 
   return worker;

@@ -18,6 +18,7 @@ interface AskToFollowEvent {
   userId?: string;
   senderId?: string;
   text?: string;
+  originEventId?: string;
 }
 
 export async function executeAskToFollow(
@@ -39,6 +40,8 @@ export async function executeAskToFollow(
   }
 
   const commenterId = event.userId || event.senderId;
+  const originEventId = event.originEventId || event.id || "unknown";
+
   const url = buildGraphApiUrl(commenterId!);
   url.searchParams.set("fields", "is_user_follow_business");
   url.searchParams.set("access_token", accessToken);
@@ -59,15 +62,16 @@ export async function executeAskToFollow(
 
   if (!isFollowing) {
     // If this is a button click ("I'm following") and they STILL haven't followed,
-    // we give them ONE warning (re-resend the card). If they spam after that, we HALT.
+    // we give them ONE warning (re-resend the card).
     if (isConfirmation) {
       const alreadyWarned = await isFollowWarningSentR(
         commenterId!,
         automation.id,
+        originEventId,
       );
       if (alreadyWarned) return ok("HALT");
 
-      await setFollowWarningSentR(commenterId!, automation.id);
+      await setFollowWarningSentR(commenterId!, automation.id, originEventId);
     }
 
     const profileUrl =
@@ -77,9 +81,6 @@ export async function executeAskToFollow(
     await checkRateLimits(instagramUserId);
     await incrementApiUsage(instagramUserId, 1);
 
-    // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
-    // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.
-    // Even though Meta docs don't explicitly show templates with comment_id, it is supported.
     const recipient = event.id
       ? { comment_id: event.id }
       : { id: commenterId! };
@@ -90,6 +91,7 @@ export async function executeAskToFollow(
         profileUrl,
       },
       automation.id,
+      originEventId,
     );
 
     const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);

@@ -10,79 +10,96 @@ import {
 import { QUICK_REPLIES } from "../config/instagram.config";
 import { Result, ok } from "../helpers/result";
 import { GuardError } from "../errors/pipeline.errors";
+import { Automation } from "@prisma/client";
 
 export async function guardEvents(
   enrichedEvents: EnrichedEvent[],
 ): Promise<Result<GuardedEvent[], GuardError>> {
-  const guardedEvents: GuardedEvent[] = [];
+  const guardResults = await Promise.all(
+    enrichedEvents.map(async (wrapper) => {
+      const safeAutomations = [];
+      let userId = "";
 
-  for (const wrapper of enrichedEvents) {
-    const safeAutomations = [];
-    let userId = "";
-
-    switch (wrapper.event.type) {
-      case "COMMENT":
-        userId = wrapper.event.event.userId;
-        break;
-      case "STORY_REPLY":
-      case "QUICK_REPLY":
-        userId = wrapper.event.event.senderId;
-        break;
-      default:
-        break;
-    }
-
-    for (const automation of wrapper.matchedAutomations) {
-      if (userId) {
-        // --- ATOMICITY & SPAM PROTECTION ---
-
-        if (wrapper.event.type === "QUICK_REPLY") {
-          const payload = wrapper.event.payload;
-          const isFollowConfirmClick = payload.startsWith(
-            QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX,
-          );
-          const isOpeningMessageClick = payload.startsWith(
-            QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
-          );
-
-          if (isFollowConfirmClick || isOpeningMessageClick) {
-            // Thread already resolved? Drop permanently — no more button clicks entertained.
-            const resolved = await isAskResolvedR(userId, automation.id);
-            if (resolved) continue;
-
-            // Per-user+automation throttle: prevents button spam within a 10s window.
-            // This works because Meta issues a NEW unique messageId per button tap,
-            // making an event-level throttle completely ineffective for postback spam.
-            const throttled = await isUserThrottledR(userId, automation.id);
-            if (throttled) continue;
-          } else {
-            // BYPASS and other QRs use per-event throttle (correct for those flows)
-            const eventId = wrapper.event.event.messageId;
-            const throttled = await isEventThrottledR(eventId);
-            if (throttled) continue;
-          }
-        } else {
-          // For new triggers (Comments), we lock based on User + Automation ID.
-          // This prevents someone from commenting the same trigger 10 times to flood.
-          const throttled = await isUserThrottledR(userId, automation.id);
-          if (throttled) continue;
-        }
-
-        const onCooldown = await isUserOnCooldownR(userId, automation.id);
-        if (onCooldown) continue;
-
-        // Prevent overlapping gates (waiting for follow/consent click)
-        const pending = await isPendingConfirmationR(userId, automation.id);
-        if (pending && wrapper.event.type !== "QUICK_REPLY") continue;
+      switch (wrapper.event.type) {
+        case "COMMENT":
+          userId = wrapper.event.event.userId;
+          break;
+        case "STORY_REPLY":
+        case "QUICK_REPLY":
+          userId = wrapper.event.event.senderId;
+          break;
+        default:
+          break;
       }
 
-      safeAutomations.push(automation);
-    }
+      if (!userId) return null;
 
-    if (safeAutomations.length > 0 || wrapper.event.type === "QUICK_REPLY") {
-      guardedEvents.push({ ...wrapper, safeAutomations });
-    }
-  }
+      const automationGuards = await Promise.all(
+        wrapper.matchedAutomations.map(async (automation) => {
+          // --- ATOMICITY & SPAM PROTECTION ---
+          if (wrapper.event.type === "QUICK_REPLY") {
+            const payload = wrapper.event.payload;
+            const isFollowConfirmClick = payload.startsWith(
+              QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX,
+            );
+            const isOpeningMessageClick = payload.startsWith(
+              QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
+            );
 
+            if (isFollowConfirmClick || isOpeningMessageClick) {
+              const resolved = await isAskResolvedR(userId, automation.id);
+              if (resolved) return null;
+
+              const throttled = await isUserThrottledR(userId, automation.id);
+              if (throttled) return null;
+            } else {
+              const eventId = (wrapper.event.event as any).messageId || "";
+              const throttled = await isEventThrottledR(eventId);
+              if (throttled) return null;
+            }
+          } else {
+            const throttled = await isUserThrottledR(userId, automation.id);
+            if (throttled) return null;
+          }
+
+          // Combined check for cooldown and pending states
+          const [onCooldown, pending] = await Promise.all([
+            isUserOnCooldownR(userId, automation.id),
+            isPendingConfirmationR(userId, automation.id),
+          ]);
+
+          if (onCooldown) return null;
+
+          // SELF-HEALING: Block new triggers while a user has a pending interaction (e.g., Follow Gate).
+          // We let QUICK_REPLY through so the user can resolve the state.
+          if (
+            pending &&
+            (wrapper.event.type === "COMMENT" ||
+              wrapper.event.type === "STORY_REPLY")
+          ) {
+            return null;
+          }
+
+          return automation;
+        }),
+      );
+
+      const validAutomations = automationGuards.filter(
+        (a): a is Automation => a !== null,
+      );
+
+      if (validAutomations.length > 0 || wrapper.event.type === "QUICK_REPLY") {
+        return {
+          ...wrapper,
+          safeAutomations: validAutomations,
+        } as GuardedEvent;
+      }
+      return null;
+    }),
+  );
+
+  const guardedEvents = guardResults.filter(
+    (item): item is GuardedEvent => item !== null,
+  );
   return ok(guardedEvents);
 }

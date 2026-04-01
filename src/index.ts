@@ -1,8 +1,19 @@
 import type { Worker } from "bullmq";
 import { logger } from "./logger";
 import { WORKER_CONFIG } from "./config/worker.config";
+import { validateEnv } from "./config/env-validator";
 import { aggregateHealthStatus } from "./health";
 import { setupWorker } from "./queue/worker";
+import {
+  startPersistenceFlusher,
+  stopPersistenceFlusher,
+} from "./persistence/flusher";
+
+// Validate configuration before starting any I/O or connecting to Redis/DB
+validateEnv();
+
+// Start the high-throughput persistence flusher (Write-Behind)
+startPersistenceFlusher();
 
 const PORT = WORKER_CONFIG.PORT;
 let worker: Worker | null = null;
@@ -18,8 +29,12 @@ process.on("SIGTERM", async () => {
   logger.info("SIGTERM received, shutting down gracefully...");
   if (worker) {
     await worker.close();
-    logger.info("Worker closed");
   }
+
+  // Ensure all pending database writes are flushed before exiting
+  await stopPersistenceFlusher();
+
+  logger.info("Worker closed");
   process.exit(0);
 });
 

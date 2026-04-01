@@ -1,5 +1,6 @@
 import { logger } from "../logger";
 import { Prisma } from "@prisma/client";
+import { prisma } from "../db/db";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 
@@ -123,7 +124,6 @@ export async function executeTransaction<T>(
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const { prisma } = await import("../db/db");
       const result = await prisma.$transaction(operations, { timeout: 10000 });
       return ok(result);
     } catch (error) {

@@ -28,6 +28,7 @@ export const KEYS = {
 
   // Domain: Tokens
   ACCESS_TOKEN: (accountId: string) => `ig:access_token:${accountId}`,
+  TOKEN_REFRESH_LOCK: (accountId: string) => `lock:refresh:token:${accountId}`,
 
   // Domain: Comments / Idempotency (Worker)
   COMMENT_PROCESSED: (commentId: string, automationId: string) =>
@@ -44,8 +45,11 @@ export const KEYS = {
     `ig:pending:${instagramUserId}:${automationId}`,
   ASK_RESOLVED: (instagramUserId: string, automationId: string) =>
     `ig:ask_resolved:${instagramUserId}:${automationId}`,
-  FOLLOW_WARNING: (commenterId: string, automationId: string) =>
-    `ig:warn:follow:${commenterId}:${automationId}`,
+  FOLLOW_WARNING: (
+    commenterId: string,
+    automationId: string,
+    originEventId: string,
+  ) => `ig:warn:follow:${commenterId}:${automationId}:${originEventId}`,
 
   // Domain: Meta API Rate Limits
   APP_USAGE: () => `ig:rate_limit:app_usage`,
@@ -63,4 +67,11 @@ export const KEYS = {
   INSTAGRAM_POSTS: (instagramUserId: string) => `ig:posts:${instagramUserId}`,
   INSTAGRAM_STORIES: (instagramUserId: string) =>
     `ig:stories:${instagramUserId}`,
+
+  // Domain: Predicted Metrics
+  PREDICTED_USAGE: (instagramUserId: string) =>
+    `ig:rate_limit:predicted:${instagramUserId}`,
+
+  // Domain: Buffers (Async Persistence)
+  PENDING_OUTCOMES: "pending:outcomes:buffer",
 } as const;

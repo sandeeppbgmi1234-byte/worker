@@ -1,11 +1,73 @@
 import { ExecutionOutcome } from "../types";
 import { executeTransaction } from "../repositories/repository-utils";
-import { Result, ok } from "../helpers/result";
+import { Result, ok, fail } from "../helpers/result";
 import { PersistenceError } from "../errors/pipeline.errors";
+import { getRedisClient } from "../redis/client";
+import { KEYS } from "../redis/keys";
+import { logger } from "../logger";
+import { setEventHandledR } from "../redis/operations/event";
 
+/**
+ * Persists execution outcomes by pushing them to a Redis buffer (Write-Behind).
+ * If Redis is down, it falls back to synchronous DB persistence to prevent data loss.
+ */
 export async function persistOutcomes(
   outcomes: ExecutionOutcome[],
 ): Promise<Result<void, PersistenceError>> {
+  if (outcomes.length === 0) {
+    return ok(undefined);
+  }
+
+  const redis = getRedisClient();
+
+  if (!redis) {
+    logger.warn(
+      "Redis client not available for buffering. Falling back to synchronous DB persistence.",
+    );
+    const syncRes = await persistOutcomesSync(outcomes);
+    return syncRes;
+  }
+
+  try {
+    const pipeline = redis.pipeline();
+    const serializedOutcomes = outcomes.map((o) => JSON.stringify(o));
+
+    // Batch push to Redis list
+    pipeline.rpush(KEYS.PENDING_OUTCOMES, ...serializedOutcomes);
+    const results = await pipeline.exec();
+
+    // Verify all pipeline commands succeeded
+    if (results) {
+      for (const [err] of results) {
+        if (err) {
+          throw new Error(`Redis pipeline command failed: ${err.message}`);
+        }
+      }
+    }
+
+    // Now that outcomes are safely buffered, mark events as permanently handled
+    const uniqueEventIds = Array.from(new Set(outcomes.map((o) => o.eventId)));
+    await Promise.all(uniqueEventIds.map((id) => setEventHandledR(id)));
+
+    return ok(undefined);
+  } catch (error: any) {
+    logger.error(
+      { error: error.message },
+      "Failed to buffer outcomes in Redis. Falling back to synchronous DB.",
+    );
+    return persistOutcomesSync(outcomes);
+  }
+}
+
+/**
+ * Original synchronous persistence logic — now used as a failsafe
+ */
+async function persistOutcomesSync(
+  outcomes: ExecutionOutcome[],
+): Promise<Result<void, PersistenceError>> {
+  let hasFailure = false;
+  let lastError: any = null;
+
   for (const outcome of outcomes) {
     try {
       await executeTransaction(
@@ -41,15 +103,38 @@ export async function persistOutcomes(
               },
             });
           }
+
+          // Mark as handled after successful DB write
+          if (outcome.eventId) {
+            await setEventHandledR(outcome.eventId);
+          }
         },
         {
-          operation: "persistPipelineOutcome",
+          operation: "persistPipelineOutcomeSync",
           models: ["AutomationExecution", "Automation"],
         },
       );
-    } catch (dbError) {
-      continue; // Move on if constraint error
+    } catch (error: any) {
+      hasFailure = true;
+      lastError = error;
+      logger.error(
+        {
+          automationId: outcome.automationId,
+          eventId: outcome.eventId,
+          error: error.message,
+        },
+        "CRITICAL PERSISTENCE FAILURE: Both Redis buffer and Synchronous DB fallback failed. Flagging for job retry.",
+      );
     }
+  }
+
+  if (hasFailure) {
+    return fail(
+      new PersistenceError(
+        `Failed to persist ${outcomes.length} outcomes in sync fallback.`,
+        lastError,
+      ),
+    );
   }
 
   return ok(undefined);

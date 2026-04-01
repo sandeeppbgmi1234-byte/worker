@@ -102,9 +102,11 @@ export async function incrementApiUsage(
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = `ig:rate_limit:predicted_count:${instagramUserId}`;
+  const key = KEYS.PREDICTED_USAGE(instagramUserId);
   try {
-    await redis.incrby(key, count);
-    await redis.expire(key, 3600);
+    const pipeline = redis.pipeline();
+    pipeline.incrby(key, count);
+    pipeline.expire(key, TTL.API_USAGE);
+    await pipeline.exec();
   } catch (error: any) {}
 }

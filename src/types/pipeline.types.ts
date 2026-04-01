@@ -73,6 +73,7 @@ export type RefinedEvent =
       type: "QUICK_REPLY";
       event: any;
       payload: string;
+      originEventId?: string;
       webhookId: string;
       time: number;
       instagramUserId: string;

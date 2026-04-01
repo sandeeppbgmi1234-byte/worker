@@ -16,8 +16,12 @@ import {
   executeEvents,
   persistOutcomes,
 } from "../pipeline";
+import { WORKER_CONFIG } from "../config/worker.config";
 
-export async function processWebhookJob(job: Job): Promise<void> {
+export async function processWebhookJob(
+  job: Job,
+  token?: string,
+): Promise<void> {
   const payload = job.data as InstagramWebhookPayload;
   const jobLogger = logger.child({
     jobId: job.id,
@@ -64,13 +68,27 @@ export async function processWebhookJob(job: Job): Promise<void> {
     if (err instanceof InstagramRateLimitError) {
       jobLogger.warn(`Instagram Rate Limit hit. Delaying job.`);
       const delayMs = err.isAppLevel ? 5 * 60_000 : 10 * 60_000;
-      await job.moveToDelayed(Date.now() + delayMs);
+      await job.moveToDelayed(Date.now() + delayMs, token);
+      throw new DelayedError();
+    }
+
+    const isTerminalError =
+      err instanceof InstagramTokenExpiredError ||
+      err instanceof InstagramSpamPolicyError;
+
+    if (!isTerminalError && job.attemptsStarted < WORKER_CONFIG.MAX_RETRIES) {
+      const delayMs = Math.pow(2, job.attemptsStarted) * 2000; // 2s, 4s, 8s backoff
+      jobLogger.warn(
+        { error: err.message, attempt: job.attemptsStarted, delayMs },
+        "Retriable error occurred. Moving job to delayed queue for backoff.",
+      );
+      await job.moveToDelayed(Date.now() + delayMs, token);
       throw new DelayedError();
     }
 
     jobLogger.error(
       { type: err?.name || typeof err, message: err?.message || String(err) },
-      "Unhandled error during webhook processing",
+      "Job failed ultimately after max retries or terminal error",
     );
     throw err;
   }

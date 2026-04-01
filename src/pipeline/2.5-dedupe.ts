@@ -33,8 +33,14 @@ export async function dedupeEvents(
       if (alreadyHandled) continue;
 
       // 2. Acquire Soft Processing Lock
-      const acquiredLock = await acquireEventLockR(eventId);
-      if (!acquiredLock) continue;
+      const lockRes = await acquireEventLockR(eventId);
+      if (lockRes === "LOCKED") continue;
+      if (lockRes === "ERROR") {
+        throw new GuardError(
+          "dedupeEvents",
+          `Redis error acquiring lock: ${eventId}`,
+        );
+      }
     }
 
     uniqueEvents.push(eventWrapper);

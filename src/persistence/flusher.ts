@@ -57,31 +57,41 @@ async function flushBufferToDb() {
       return;
     }
 
-    // 1. Atomic move of batch to Vault (PROCESSING_KEY)
-    // Using a Lua script to ensure atomicity even for multi-item move
-    const moveScript = `
-      local items = redis.call('lrange', KEYS[1], 0, ARGV[1] - 1)
-      if #items > 0 then
-        redis.call('lpush', KEYS[2], unpack(items))
-        redis.call('ltrim', KEYS[1], #items, -1)
-      end
-      return items
-    `;
+    // 1. VAULT-FIRST SAFETY: Check if we have a stranded batch from a previous crash
+    let items = await redis.lrange(PROCESSING_KEY, 0, -1);
+    let isStrandedBatch = items && items.length > 0;
 
-    const items = await (redis as any).eval(
-      moveScript,
-      2,
-      KEYS.PENDING_OUTCOMES,
-      PROCESSING_KEY,
-      FLUSH_BATCH_SIZE,
-    );
+    if (!isStrandedBatch) {
+      // No stranded batch, attempt to move a fresh batch to the Vault atomically
+      const moveScript = `
+        local items = redis.call('lrange', KEYS[1], 0, ARGV[1] - 1)
+        if #items > 0 then
+          redis.call('lpush', KEYS[2], unpack(items))
+          redis.call('ltrim', KEYS[1], #items, -1)
+        end
+        return items
+      `;
+
+      items = await (redis as any).eval(
+        moveScript,
+        2,
+        KEYS.PENDING_OUTCOMES,
+        PROCESSING_KEY,
+        FLUSH_BATCH_SIZE,
+      );
+    } else {
+      logger.warn(
+        { count: items.length },
+        "Persistence Flusher: Found stranded batch in vault. Resolving first.",
+      );
+    }
 
     if (!items || items.length === 0) {
       isFlushing = false;
       return;
     }
 
-    // Process the batch
+    // Process the batch (either fresh or stranded)
     const outcomes = items.map(
       (i: string) => JSON.parse(i) as ExecutionOutcome,
     );

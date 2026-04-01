@@ -20,24 +20,26 @@ export async function isEventHandledR(eventId: string): Promise<boolean> {
   }
 }
 
+export type LockResult = "ACQUIRED" | "LOCKED" | "ERROR";
+
 /**
  * Acquires a short-term lock on a webhook event ID to prevent parallel processing.
  * Hard-coded to 10 minutes; if the server crashes, the lock will expire allowing retry.
- * @returns true if the lock was successfully acquired, false if it already exists or on error.
+ * @returns ACQUIRED if the lock was successfully acquired, LOCKED if it already exists, ERROR on redis failure.
  */
-export async function acquireEventLockR(eventId: string): Promise<boolean> {
+export async function acquireEventLockR(eventId: string): Promise<LockResult> {
   const redis = getRedisClient();
-  if (!redis) return false;
+  if (!redis) return "ERROR";
 
   const key = `lock:event:${eventId}`;
 
   try {
     const result = await redis.set(key, "1", "EX", 600, "NX");
     // If result is "OK", the lock was acquired
-    return result === "OK";
+    return result === "OK" ? "ACQUIRED" : "LOCKED";
   } catch (error: any) {
     logger.warn({ eventId, error }, "Redis error acquiring event lock:");
-    return false;
+    return "ERROR";
   }
 }
 

@@ -14,6 +14,10 @@ import { setEventHandledR } from "../redis/operations/event";
 export async function persistOutcomes(
   outcomes: ExecutionOutcome[],
 ): Promise<Result<void, PersistenceError>> {
+  if (outcomes.length === 0) {
+    return ok(undefined);
+  }
+
   const redis = getRedisClient();
 
   if (!redis) {

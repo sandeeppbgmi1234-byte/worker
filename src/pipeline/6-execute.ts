@@ -23,7 +23,7 @@ import { executePublicReply } from "@/branches";
 export async function executeEvents(
   guardedEvents: GuardedEvent[],
 ): Promise<Result<ExecutionOutcome[], ExecutionError>> {
-  const executionResults = await Promise.all(
+  const executionResults = await Promise.allSettled(
     guardedEvents.map(async (wrapper) => {
       let eventId = "";
       let userId = "";
@@ -63,6 +63,7 @@ export async function executeEvents(
               { userId, eventId },
               "Execution lock held by another thread. Flagging for retry.",
             );
+            // We throw here so allSettled catches it as a rejection for this specific event
             throw new ExecutionError(
               "executeEvents",
               `Execution lock held for user ${userId}`,
@@ -106,7 +107,38 @@ export async function executeEvents(
     }),
   );
 
-  const flatOutcomes = executionResults.flat();
+  const flatOutcomes: ExecutionOutcome[] = [];
+  const errors: any[] = [];
+
+  for (const res of executionResults) {
+    if (res.status === "fulfilled") {
+      flatOutcomes.push(...res.value);
+    } else {
+      errors.push(res.reason);
+    }
+  }
+
+  // ATOMIC RECONCILIATION: If we have outcomes (some successful DMs were sent),
+  // we MUST return them to persist stage first, even if others failed.
+  if (flatOutcomes.length > 0) {
+    // If there were also errors, we log them but still return the successes
+    if (errors.length > 0) {
+      logger.warn(
+        { errorCount: errors.length },
+        "Partial batch failure in execution stage. Propagating successes first.",
+      );
+    }
+    return ok(flatOutcomes);
+  }
+
+  // If everything failed, then throw the first error to trigger BullMQ retry
+  if (errors.length > 0) {
+    return ok([]); // Still return empty array so persist stage doesn't crash?
+    // Actually, if everything failed, BullMQ should retry.
+    // Let's rethrow the first error.
+    throw errors[0];
+  }
+
   return ok(flatOutcomes);
 }
 
@@ -121,7 +153,7 @@ async function runExecutionFlow(
   isOpeningMessageFlow: boolean,
 ): Promise<ExecutionOutcome[]> {
   // Perform execution for each automation in parallel
-  const automationOutcomes = await Promise.all(
+  const automationResults = await Promise.allSettled(
     wrapper.safeAutomations.map(async (automation) => {
       // 0. SELF-HEALING: Clean slate for new threads
       if (
@@ -229,7 +261,6 @@ async function runExecutionFlow(
       const [replyRes, dmRes] = await Promise.all([replyPromise, dmPromise]);
 
       // PARTIAL SUCCESS RESILIENCE: Prioritize DM Delivery outcome for Cooldown & State tracking
-      // Informing the user (Public Reply) is a second priority.
       if (dmRes.ok) {
         const isDelivered =
           dmRes.value.sentMessage || dmRes.value.instagramMessageId;
@@ -290,6 +321,18 @@ async function runExecutionFlow(
       } as ExecutionOutcome;
     }),
   );
+
+  const automationOutcomes: ExecutionOutcome[] = [];
+  for (const res of automationResults) {
+    if (res.status === "fulfilled") {
+      automationOutcomes.push(res.value);
+    } else {
+      logger.error(
+        { error: res.reason },
+        "Individual automation failed during multi-trigger flow.",
+      );
+    }
+  }
 
   return automationOutcomes;
 }

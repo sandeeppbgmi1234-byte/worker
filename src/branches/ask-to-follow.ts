@@ -61,8 +61,12 @@ export async function executeAskToFollow(
   const isFollowing = followerRes.value?.is_user_follow_business === true;
 
   if (!isFollowing) {
-    // If this is a button click ("I'm following") and they STILL haven't followed,
-    // we give them ONE warning (re-resend the card).
+    const recipient = event.id
+      ? { comment_id: event.id }
+      : { id: commenterId! };
+    const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
+
+    // Case 1: They clicked "I am Following" but are still not following
     if (isConfirmation) {
       const alreadyWarned = await isFollowWarningSentR(
         commenterId!,
@@ -71,19 +75,36 @@ export async function executeAskToFollow(
       );
       if (alreadyWarned) return ok("HALT");
 
-      await setFollowWarningSentR(commenterId!, automation.id, originEventId);
+      await checkRateLimits(instagramUserId);
+      await incrementApiUsage(instagramUserId, 1);
+
+      const reminderText =
+        "Please follow to access the link 🔔. This reminder will appear only 1 time ⏳. Once you have followed, click ‘I am Following’ above to continue ✅";
+
+      const res = await fetchFromInstagram<any>(msgUrl.toString(), {
+        method: "POST",
+        body: {
+          recipient,
+          message: { text: reminderText },
+          messaging_type: "RESPONSE" as const,
+          access_token: accessToken,
+        },
+        instagramUserId,
+      });
+
+      if (res.ok) {
+        await setFollowWarningSentR(commenterId!, automation.id, originEventId);
+      }
+      return ok("HALT");
     }
 
+    // Case 2: Initial Trigger - send the Template card
     const profileUrl =
       automation.askToFollowLink ||
       `https://www.instagram.com/${instagramUsername}`;
 
     await checkRateLimits(instagramUserId);
     await incrementApiUsage(instagramUserId, 1);
-
-    const recipient = event.id
-      ? { comment_id: event.id }
-      : { id: commenterId! };
 
     const templateAttachment = buildAskToFollowTemplate(
       {
@@ -94,7 +115,6 @@ export async function executeAskToFollow(
       originEventId,
     );
 
-    const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
     const result = await fetchFromInstagram<any>(msgUrl.toString(), {
       method: "POST",
       body: {
@@ -104,7 +124,7 @@ export async function executeAskToFollow(
         access_token: accessToken,
       },
       timeoutMs: 15000,
-      retries: 0, // No retries for DM cards to avoid duplicates
+      retries: 0,
       instagramUserId,
     });
 

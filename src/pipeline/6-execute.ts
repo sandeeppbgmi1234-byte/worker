@@ -206,6 +206,21 @@ async function runExecutionFlow(
 
       if (resolvedAskRes.value === "HALT") {
         if (userId) await setPendingConfirmationR(userId, automation.id);
+
+        if (wrapper.event.type === "COMMENT") {
+          await executePublicReply(
+            wrapper.event.event as any,
+            automation,
+            wrapper.accessToken,
+            wrapper.event.instagramUserId,
+          ).catch((err) => {
+            logger.warn(
+              { error: err.message, automationId: automation.id },
+              "Failed to send public reply during follow gate",
+            );
+          });
+        }
+
         return {
           automationId: automation.id,
           eventId,
@@ -228,6 +243,20 @@ async function runExecutionFlow(
 
           if (openRes.ok && userId)
             await setPendingConfirmationR(userId, automation.id);
+
+          if (wrapper.event.type === "COMMENT") {
+            await executePublicReply(
+              wrapper.event.event as any,
+              automation,
+              wrapper.accessToken,
+              wrapper.event.instagramUserId,
+            ).catch((err) => {
+              logger.warn(
+                { error: err.message, automationId: automation.id },
+                "Failed to send public reply during opening message gate",
+              );
+            });
+          }
 
           return {
             automationId: automation.id,

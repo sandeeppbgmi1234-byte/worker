@@ -2,6 +2,8 @@ import { prisma } from "../db/db";
 import { ERROR_MESSAGES } from "../config/instagram.config";
 import { fetchFromInstagram } from "./gateway";
 import { RefreshTokenResponse } from "../types/instagram.types";
+import { clearAccountCacheR } from "../redis/operations/user";
+import { logger } from "../logger";
 
 export async function refreshAccessToken(
   accountId: string,
@@ -11,34 +13,63 @@ export async function refreshAccessToken(
   });
   if (!account) throw new Error(ERROR_MESSAGES.AUTH.NO_INSTAGRAM_ACCOUNT);
 
-  const params = new URLSearchParams({
-    grant_type: "ig_refresh_token",
-    access_token: account.accessToken,
-  });
+  try {
+    const params = new URLSearchParams({
+      grant_type: "ig_refresh_token",
+      access_token: account.accessToken,
+    });
 
-  const url = `https://graph.instagram.com/refresh_access_token?${params.toString()}`;
-  const response = await fetchFromInstagram<RefreshTokenResponse>(url, {
-    method: "GET",
-    timeoutMs: 15000,
-    retries: 2,
-    instagramUserId: accountId,
-  });
+    const url = `https://graph.instagram.com/refresh_access_token?${params.toString()}`;
+    const response = await fetchFromInstagram<RefreshTokenResponse>(url, {
+      method: "GET",
+      timeoutMs: 15000,
+      retries: 2,
+      instagramUserId: account.instagramUserId,
+    });
 
-  if (!response.ok) throw response.error;
+    if (!response.ok) throw response.error;
 
-  const data = response.value;
-  const expiresAt = new Date(Date.now() + data.expires_in * 1000);
+    const data = response.value;
+    const expiresAt = new Date(Date.now() + data.expires_in * 1000);
 
-  await prisma.instaAccount.update({
-    where: { id: accountId },
-    data: {
-      accessToken: data.access_token,
-      tokenExpiresAt: expiresAt,
-      lastSyncedAt: new Date(),
-    },
-  });
+    await prisma.instaAccount.update({
+      where: { id: accountId },
+      data: {
+        accessToken: data.access_token,
+        tokenExpiresAt: expiresAt,
+        lastSyncedAt: new Date(),
+      },
+    });
 
-  return { accessToken: data.access_token, expiresAt };
+    return { accessToken: data.access_token, expiresAt };
+  } catch (error: any) {
+    logger.error(
+      {
+        accountId,
+        instagramUserId: account.instagramUserId,
+        error: error.message,
+      },
+      "Instagram token refresh failed. Deactivating account.",
+    );
+
+    // 1. Mark account as deactivated
+    await prisma.instaAccount.update({
+      where: { id: accountId },
+      data: { isActive: false },
+    });
+
+    // 2. Clear volatile cache
+    try {
+      await clearAccountCacheR(accountId, account.instagramUserId);
+    } catch (cacheError: any) {
+      logger.error(
+        { accountId, error: cacheError.message },
+        "Follower cleanup failed after token refresh error",
+      );
+    }
+
+    throw error;
+  }
 }
 
 export function isTokenExpiringSoon(

@@ -46,7 +46,7 @@ export async function filterEvents(
               mediaId,
               async () => {
                 const res = await findActiveAutomationsByPost(
-                  accountResult.userId,
+                  accountResult.id,
                   mediaId,
                 );
                 return res.ok ? res.value : [];
@@ -62,7 +62,7 @@ export async function filterEvents(
               storyId,
               async () => {
                 const res = await findActiveAutomationsByStory(
-                  accountResult.userId,
+                  accountResult.id,
                   storyId,
                 );
                 return res.ok ? res.value : [];
@@ -75,7 +75,7 @@ export async function filterEvents(
               accountResult.id,
               async () => {
                 const res = await findActiveAutomationsForAccountDM(
-                  accountResult.userId,
+                  accountResult.id,
                 );
                 return res.ok ? res.value : [];
               },

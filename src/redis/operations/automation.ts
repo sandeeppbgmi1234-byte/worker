@@ -2,13 +2,14 @@ import { getRedisClient } from "../client";
 import { KEYS, TTL } from "../keys";
 import type { Automation } from "@prisma/client";
 
+// All cache functions keyed by instaAccountId for strict account isolation
 export async function getAutomationsByPostR(
-  userId: string,
+  instaAccountId: string,
   mediaId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_BY_POST(userId, mediaId);
+  const key = KEYS.AUTOMATIONS_BY_POST(instaAccountId, mediaId);
 
   if (!redis) return dbFallback();
 
@@ -27,12 +28,12 @@ export async function getAutomationsByPostR(
 }
 
 export async function getAutomationsByStoryR(
-  userId: string,
+  instaAccountId: string,
   storyId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_BY_STORY(userId, storyId);
+  const key = KEYS.AUTOMATIONS_BY_STORY(instaAccountId, storyId);
 
   if (!redis) return dbFallback();
 
@@ -49,6 +50,7 @@ export async function getAutomationsByStoryR(
     return dbFallback();
   }
 }
+
 export async function getAutomationByIdR(
   automationId: string,
   dbFallback: () => Promise<Automation | null>,
@@ -75,11 +77,11 @@ export async function getAutomationByIdR(
 }
 
 export async function getAutomationsForAccountDMR(
-  userId: string,
+  instaAccountId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(userId);
+  const key = KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(instaAccountId);
 
   if (!redis) return dbFallback();
 

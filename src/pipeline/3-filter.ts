@@ -3,11 +3,13 @@ import {
   getAutomationsByPostR,
   getAutomationsByStoryR,
   getAutomationByIdR,
+  getAutomationsForAccountDMR,
 } from "../redis/operations/automation";
 import { findInstaAccountByInstagramUserId } from "../repositories/insta-account.repository";
 import {
   findActiveAutomationsByPost,
   findActiveAutomationsByStory,
+  findActiveAutomationsForAccountDM,
   findAutomationById,
 } from "../repositories/automation.repository";
 import { RefinedEvent, FilteredEvent } from "../types";
@@ -40,7 +42,7 @@ export async function filterEvents(
           case "COMMENT": {
             const mediaId = eventWrapper.event.mediaId;
             automations = await getAutomationsByPostR(
-              accountResult.userId,
+              accountResult.id,
               mediaId,
               async () => {
                 const res = await findActiveAutomationsByPost(
@@ -56,12 +58,24 @@ export async function filterEvents(
           case "STORY_REPLY": {
             const storyId = eventWrapper.event.storyId;
             automations = await getAutomationsByStoryR(
-              accountResult.userId,
+              accountResult.id,
               storyId,
               async () => {
                 const res = await findActiveAutomationsByStory(
                   accountResult.userId,
                   storyId,
+                );
+                return res.ok ? res.value : [];
+              },
+            );
+            break;
+          }
+          case "DM_MESSAGE": {
+            automations = await getAutomationsForAccountDMR(
+              accountResult.id,
+              async () => {
+                const res = await findActiveAutomationsForAccountDM(
+                  accountResult.userId,
                 );
                 return res.ok ? res.value : [];
               },

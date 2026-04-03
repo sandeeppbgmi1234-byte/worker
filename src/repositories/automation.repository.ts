@@ -60,3 +60,26 @@ export async function findAutomationById(
     },
   );
 }
+
+export async function findActiveAutomationsForAccountDM(
+  userId: string,
+): Promise<Result<Automation[], DatabaseError>> {
+  return executeWithErrorHandling(
+    async () => {
+      const result = await prisma.automation.findMany({
+        where: {
+          userId,
+          triggerType: "RESPOND_TO_ALL_DMS",
+          status: "ACTIVE",
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      return result;
+    },
+    {
+      operation: "findActiveAutomationsForAccountDM",
+      model: "Automation",
+      retries: 1,
+    },
+  );
+}

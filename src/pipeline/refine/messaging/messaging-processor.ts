@@ -29,6 +29,24 @@ export function processMessagingEntry(
           },
         });
       }
+    } else if (
+      msg.message?.text &&
+      msg.message?.mid &&
+      !msg.message?.quick_reply
+    ) {
+      // Process Standard DM (if it's not a story reply or quick reply)
+      events.push({
+        type: "DM_MESSAGE",
+        webhookId: entry.id,
+        time: entry.time,
+        instagramUserId,
+        event: {
+          messageId: msg.message.mid,
+          text: msg.message.text,
+          senderId: msg.sender.id,
+          timestamp: String(msg.timestamp),
+        },
+      });
     }
 
     // Process Quick Reply / Postback

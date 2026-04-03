@@ -25,6 +25,7 @@ export async function guardEvents(
           userId = wrapper.event.event.userId;
           break;
         case "STORY_REPLY":
+        case "DM_MESSAGE":
         case "QUICK_REPLY":
           userId = wrapper.event.event.senderId;
           break;
@@ -75,7 +76,8 @@ export async function guardEvents(
           if (
             pending &&
             (wrapper.event.type === "COMMENT" ||
-              wrapper.event.type === "STORY_REPLY")
+              wrapper.event.type === "STORY_REPLY" ||
+              wrapper.event.type === "DM_MESSAGE")
           ) {
             return null;
           }

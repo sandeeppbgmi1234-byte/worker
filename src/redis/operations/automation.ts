@@ -73,3 +73,26 @@ export async function getAutomationByIdR(
     return dbFallback();
   }
 }
+
+export async function getAutomationsForAccountDMR(
+  userId: string,
+  dbFallback: () => Promise<Automation[]>,
+): Promise<Automation[]> {
+  const redis = getRedisClient();
+  const key = KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(userId);
+
+  if (!redis) return dbFallback();
+
+  try {
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+
+    const automations = await dbFallback();
+    redis
+      .set(key, JSON.stringify(automations), "EX", TTL.AUTOMATION_TTL)
+      .catch(() => {});
+    return automations;
+  } catch (error: any) {
+    return dbFallback();
+  }
+}

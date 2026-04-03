@@ -14,7 +14,7 @@ import {
 import { QUICK_REPLIES } from "../config/instagram.config";
 import { logger } from "../logger";
 import { getRedisClient } from "../redis/client";
-import { executePublicReply } from "@/branches";
+import { executePublicReply } from "../branches/public-reply";
 
 /**
  * Executes automation actions for a batch of guarded events.
@@ -33,6 +33,7 @@ export async function executeEvents(
           userId = wrapper.event.event.userId;
           break;
         case "STORY_REPLY":
+        case "DM_MESSAGE":
         case "QUICK_REPLY":
           eventId = wrapper.event.event.messageId;
           userId = wrapper.event.event.senderId;
@@ -158,7 +159,8 @@ async function runExecutionFlow(
       // 0. SELF-HEALING: Clean slate for new threads
       if (
         (wrapper.event.type === "COMMENT" ||
-          wrapper.event.type === "STORY_REPLY") &&
+          wrapper.event.type === "STORY_REPLY" ||
+          wrapper.event.type === "DM_MESSAGE") &&
         userId
       ) {
         await Promise.all([

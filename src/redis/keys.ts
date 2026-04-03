@@ -58,10 +58,12 @@ export const KEYS = {
 
   // Domain: Automations
   AUTOMATION_BY_ID: (automationId: string) => `ig:automation:${automationId}`,
-  AUTOMATIONS_BY_POST: (userId: string, mediaId: string) =>
-    `ig:automation:post:${userId}:${mediaId}`,
-  AUTOMATIONS_BY_STORY: (userId: string, storyId: string) =>
-    `ig:automation:story:${userId}:${storyId}`,
+  AUTOMATIONS_BY_POST: (instaAccountId: string, mediaId: string) =>
+    `ig:automation:post:${instaAccountId}:${mediaId}`,
+  AUTOMATIONS_BY_STORY: (instaAccountId: string, storyId: string) =>
+    `ig:automation:story:${instaAccountId}:${storyId}`,
+  AUTOMATIONS_FOR_ACCOUNT_DM: (instaAccountId: string) =>
+    `ig:automation:account_dm:${instaAccountId}`,
 
   // Domain: Instagram Data
   INSTAGRAM_POSTS: (instagramUserId: string) => `ig:posts:${instagramUserId}`,

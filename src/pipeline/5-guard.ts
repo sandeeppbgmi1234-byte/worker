@@ -25,6 +25,7 @@ export async function guardEvents(
           userId = wrapper.event.event.userId;
           break;
         case "STORY_REPLY":
+        case "DM_MESSAGE":
         case "QUICK_REPLY":
           userId = wrapper.event.event.senderId;
           break;

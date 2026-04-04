@@ -1,5 +1,6 @@
 import { getRedisClient } from "../client";
 import { KEYS, TTL } from "../keys";
+import { logger } from "../../logger";
 
 export async function getAccountByInstagramIdR<T>(
   instagramUserId: string,
@@ -60,4 +61,35 @@ export async function setUserConnectedR(
   try {
     await redis.set(key, "1", "EX", TTL.USER_CONNECTED);
   } catch (error: any) {}
+}
+
+export async function clearAccountCacheR(
+  accountId: string,
+  instagramUserId: string,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const keysToDelete = [
+    KEYS.ACCESS_TOKEN(accountId),
+    KEYS.ACCOUNT_BY_IG(instagramUserId),
+    KEYS.USER_CONNECTION(instagramUserId),
+    KEYS.ACCOUNT_USAGE(instagramUserId),
+    KEYS.INSTAGRAM_POSTS(instagramUserId),
+    KEYS.INSTAGRAM_STORIES(instagramUserId),
+    KEYS.PREDICTED_USAGE(instagramUserId),
+  ];
+
+  try {
+    await redis.del(...keysToDelete);
+    logger.info(
+      { accountId, instagramUserId },
+      "Cleared all account-related cache keys due to deactivation",
+    );
+  } catch (error: any) {
+    logger.error(
+      { accountId, instagramUserId, error: error.message },
+      "Failed to clear account cache keys",
+    );
+  }
 }

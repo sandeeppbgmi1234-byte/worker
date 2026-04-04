@@ -20,6 +20,7 @@ export async function dedupeEvents(
         eventId = eventWrapper.event.id;
         break;
       case "STORY_REPLY":
+      case "DM_MESSAGE":
       case "QUICK_REPLY":
         eventId = eventWrapper.event.messageId;
         break;

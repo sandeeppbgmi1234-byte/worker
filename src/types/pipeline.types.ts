@@ -48,6 +48,13 @@ export interface ValidatedStoryReply {
   timestamp: string;
 }
 
+export interface ValidatedDmMessage {
+  messageId: string;
+  text: string;
+  senderId: string;
+  timestamp: string;
+}
+
 export interface ExecutionResult {
   success: boolean;
   executionId?: string;
@@ -65,6 +72,13 @@ export type RefinedEvent =
   | {
       type: "STORY_REPLY";
       event: ValidatedStoryReply;
+      webhookId: string;
+      time: number;
+      instagramUserId: string;
+    }
+  | {
+      type: "DM_MESSAGE";
+      event: ValidatedDmMessage;
       webhookId: string;
       time: number;
       instagramUserId: string;

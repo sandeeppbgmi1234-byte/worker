@@ -2,13 +2,14 @@ import { getRedisClient } from "../client";
 import { KEYS, TTL } from "../keys";
 import type { Automation } from "@prisma/client";
 
+// All cache functions keyed by instaAccountId for strict account isolation
 export async function getAutomationsByPostR(
-  userId: string,
+  instaAccountId: string,
   mediaId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_BY_POST(userId, mediaId);
+  const key = KEYS.AUTOMATIONS_BY_POST(instaAccountId, mediaId);
 
   if (!redis) return dbFallback();
 
@@ -27,12 +28,12 @@ export async function getAutomationsByPostR(
 }
 
 export async function getAutomationsByStoryR(
-  userId: string,
+  instaAccountId: string,
   storyId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_BY_STORY(userId, storyId);
+  const key = KEYS.AUTOMATIONS_BY_STORY(instaAccountId, storyId);
 
   if (!redis) return dbFallback();
 
@@ -49,6 +50,7 @@ export async function getAutomationsByStoryR(
     return dbFallback();
   }
 }
+
 export async function getAutomationByIdR(
   automationId: string,
   dbFallback: () => Promise<Automation | null>,
@@ -69,6 +71,29 @@ export async function getAutomationByIdR(
         .catch(() => {});
     }
     return automation;
+  } catch (error: any) {
+    return dbFallback();
+  }
+}
+
+export async function getAutomationsForAccountDMR(
+  instaAccountId: string,
+  dbFallback: () => Promise<Automation[]>,
+): Promise<Automation[]> {
+  const redis = getRedisClient();
+  const key = KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(instaAccountId);
+
+  if (!redis) return dbFallback();
+
+  try {
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+
+    const automations = await dbFallback();
+    redis
+      .set(key, JSON.stringify(automations), "EX", TTL.AUTOMATION_TTL)
+      .catch(() => {});
+    return automations;
   } catch (error: any) {
     return dbFallback();
   }

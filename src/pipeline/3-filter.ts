@@ -3,11 +3,13 @@ import {
   getAutomationsByPostR,
   getAutomationsByStoryR,
   getAutomationByIdR,
+  getAutomationsForAccountDMR,
 } from "../redis/operations/automation";
 import { findInstaAccountByInstagramUserId } from "../repositories/insta-account.repository";
 import {
   findActiveAutomationsByPost,
   findActiveAutomationsByStory,
+  findActiveAutomationsForAccountDM,
   findAutomationById,
 } from "../repositories/automation.repository";
 import { RefinedEvent, FilteredEvent } from "../types";
@@ -40,11 +42,11 @@ export async function filterEvents(
           case "COMMENT": {
             const mediaId = eventWrapper.event.mediaId;
             automations = await getAutomationsByPostR(
-              accountResult.userId,
+              accountResult.id,
               mediaId,
               async () => {
                 const res = await findActiveAutomationsByPost(
-                  accountResult.userId,
+                  accountResult.id,
                   mediaId,
                 );
                 return res.ok ? res.value : [];
@@ -56,12 +58,24 @@ export async function filterEvents(
           case "STORY_REPLY": {
             const storyId = eventWrapper.event.storyId;
             automations = await getAutomationsByStoryR(
-              accountResult.userId,
+              accountResult.id,
               storyId,
               async () => {
                 const res = await findActiveAutomationsByStory(
-                  accountResult.userId,
+                  accountResult.id,
                   storyId,
+                );
+                return res.ok ? res.value : [];
+              },
+            );
+            break;
+          }
+          case "DM_MESSAGE": {
+            automations = await getAutomationsForAccountDMR(
+              accountResult.id,
+              async () => {
+                const res = await findActiveAutomationsForAccountDM(
+                  accountResult.id,
                 );
                 return res.ok ? res.value : [];
               },
@@ -86,7 +100,12 @@ export async function filterEvents(
                 },
               );
 
-              if (automation) {
+              // SECURITY: Ensure the requested automation corresponds to the current IG account.
+              // This prevents cross-account binding via crafted or stale payloads.
+              if (
+                automation &&
+                automation.instaAccountId === accountResult.id
+              ) {
                 return {
                   event: eventWrapper,
                   accountId: accountResult.id,

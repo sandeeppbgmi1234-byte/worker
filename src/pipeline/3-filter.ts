@@ -100,7 +100,12 @@ export async function filterEvents(
                 },
               );
 
-              if (automation) {
+              // SECURITY: Ensure the requested automation corresponds to the current IG account.
+              // This prevents cross-account binding via crafted or stale payloads.
+              if (
+                automation &&
+                automation.instaAccountId === accountResult.id
+              ) {
                 return {
                   event: eventWrapper,
                   accountId: accountResult.id,

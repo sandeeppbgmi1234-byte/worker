@@ -4,6 +4,7 @@ import { fetchFromInstagram } from "./gateway";
 import { RefreshTokenResponse } from "../types/instagram.types";
 import { clearAccountCacheR } from "../redis/operations/user";
 import { logger } from "../logger";
+import { InstagramTokenExpiredError } from "../errors/instagram.errors";
 
 export async function refreshAccessToken(
   accountId: string,
@@ -43,31 +44,59 @@ export async function refreshAccessToken(
 
     return { accessToken: data.access_token, expiresAt };
   } catch (error: any) {
-    logger.error(
-      {
-        accountId,
-        instagramUserId: account.instagramUserId,
-        error: error.message,
-      },
-      "Instagram token refresh failed. Deactivating account.",
-    );
+    // Only deactivate for confirmed auth revocation or invalid tokens (e.g. code 190)
+    // Infrastructure errors (timeouts, 500s) should not deactivate the account
+    const isAuthError =
+      error instanceof InstagramTokenExpiredError ||
+      error.message?.toLowerCase().includes("oauth") ||
+      error.message?.toLowerCase().includes("invalid token") ||
+      error.message?.toLowerCase().includes("revoked");
 
-    // 1. Mark account as deactivated
-    await prisma.instaAccount.update({
-      where: { id: accountId },
-      data: { isActive: false },
-    });
+    if (isAuthError) {
+      logger.warn(
+        {
+          accountId,
+          instagramUserId: account.instagramUserId,
+          error: error.message,
+        },
+        "Instagram token revoked or expired — deactivating account.",
+      );
 
-    // 2. Clear volatile cache
-    try {
-      await clearAccountCacheR(accountId, account.instagramUserId);
-    } catch (cacheError: any) {
+      // Best-effort deactivation
+      await prisma.instaAccount
+        .update({
+          where: { id: accountId },
+          data: { isActive: false },
+        })
+        .catch((dbErr) => {
+          logger.error(
+            { accountId, error: dbErr.message },
+            "Failed to update isActive=false in DB during revocation handling",
+          );
+        });
+
+      // Best-effort cache cleanup
+      try {
+        await clearAccountCacheR(accountId, account.instagramUserId);
+      } catch (cacheError: any) {
+        logger.error(
+          { accountId, error: cacheError.message },
+          "Volatile cache cleanup failed during revocation handling",
+        );
+      }
+    } else {
+      // For non-auth errors (timeout, 5xx), we log but keep the account active
       logger.error(
-        { accountId, error: cacheError.message },
-        "Follower cleanup failed after token refresh error",
+        {
+          accountId,
+          instagramUserId: account.instagramUserId,
+          error: error.message,
+        },
+        "Instagram token refresh failed (transient error) — account remains active",
       );
     }
 
+    // Always rethrow the original error for the caller to handle
     throw error;
   }
 }

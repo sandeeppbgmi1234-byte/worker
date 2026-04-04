@@ -51,24 +51,25 @@ export async function executeEvents(
         QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
       );
 
-      // --- CRITICAL-2: ACQUIRE PER-USER EXECUTION LOCK (30s) ---
+      // --- CRITICAL-2: ACQUIRE PER-USER-PER-ACCOUNT EXECUTION LOCK (30s) ---
       // This prevents "Shadow Replica" jobs from sending duplicate DMs if the process stalls.
+      // Scoped by both account and user to ensure absolute siloed isolation.
       if (userId) {
-        const lockKey = `lock:execute:user:${userId}`;
+        const lockKey = `lock:execute:account:${wrapper.accountId}:user:${userId}`;
         const redis = getRedisClient();
         if (redis) {
           const lockToken = Math.random().toString(36).substring(2, 15);
           const acquired = await redis.set(lockKey, lockToken, "EX", 30, "NX");
           if (acquired !== "OK") {
             logger.info(
-              { userId, eventId },
+              { userId, accountId: wrapper.accountId, eventId },
               "Execution lock held by another thread. Flagging for retry.",
             );
             // We throw here so allSettled catches it as a rejection for this specific event
             throw new ExecutionError(
               "executeEvents",
-              `Execution lock held for user ${userId}`,
-              { userId, eventId },
+              `Execution lock held for user ${userId} on account ${wrapper.accountId}`,
+              { userId, accountId: wrapper.accountId, eventId },
             );
           }
           try {

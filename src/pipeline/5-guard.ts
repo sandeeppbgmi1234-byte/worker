@@ -76,8 +76,7 @@ export async function guardEvents(
           if (
             pending &&
             (wrapper.event.type === "COMMENT" ||
-              wrapper.event.type === "STORY_REPLY" ||
-              wrapper.event.type === "DM_MESSAGE")
+              wrapper.event.type === "STORY_REPLY")
           ) {
             return null;
           }

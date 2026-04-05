@@ -99,24 +99,42 @@ async function flushBufferToDb() {
     // 2. Perform bulk write to DB
     try {
       await prisma.$transaction(async (tx) => {
-        // Bulk create executions
-        await tx.automationExecution.createMany({
-          data: outcomes.map((o: ExecutionOutcome) => ({
-            automationId: o.automationId,
-            commentId: o.eventId || "unknown_event",
-            commentText: o.commentData.text ?? "Interaction",
-            commentUsername:
-              o.commentData.username ?? o.commentData.senderId ?? "unknown",
-            commentUserId:
-              o.commentData.userId ?? o.commentData.senderId ?? "unknown",
-            actionType: o.actionType,
-            sentMessage: o.sentMessage ?? "",
-            status: o.status,
-            errorMessage: o.errorMessage ?? "",
-            instagramMessageId: o.instagramMessageId ?? "",
-            executedAt: new Date(),
-          })),
-        });
+        // Idempotent UPSERT for each outcome
+        // This handles transitions (e.g. OPENING_MESSAGE_SENT -> SUCCESS) on the same comment
+        await Promise.all(
+          outcomes.map((o: ExecutionOutcome) =>
+            tx.automationExecution.upsert({
+              where: {
+                commentId_automationId: {
+                  commentId: o.eventId || "unknown_event",
+                  automationId: o.automationId,
+                },
+              },
+              update: {
+                status: o.status,
+                errorMessage: o.errorMessage ?? "",
+                instagramMessageId: o.instagramMessageId ?? "",
+                sentMessage: o.sentMessage ?? "",
+                executedAt: new Date(),
+              },
+              create: {
+                automationId: o.automationId,
+                commentId: o.eventId || "unknown_event",
+                commentText: o.commentData.text ?? "Interaction",
+                commentUsername:
+                  o.commentData.username ?? o.commentData.senderId ?? "unknown",
+                commentUserId:
+                  o.commentData.userId ?? o.commentData.senderId ?? "unknown",
+                actionType: o.actionType,
+                sentMessage: o.sentMessage ?? "",
+                status: o.status,
+                errorMessage: o.errorMessage ?? "",
+                instagramMessageId: o.instagramMessageId ?? "",
+                executedAt: new Date(),
+              },
+            }),
+          ),
+        );
 
         // Update automation triggered counts using a Frequency Map (O(n) instead of O(n^2))
         const successIds = outcomes
@@ -136,6 +154,39 @@ async function flushBufferToDb() {
               lastTriggeredAt: new Date(),
             },
           });
+        }
+
+        // --- BILLING SYNC: Aggregate and update CreditLedger ---
+        const billableOutcomes = outcomes.filter((o: ExecutionOutcome) =>
+          ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(o.status),
+        );
+
+        if (billableOutcomes.length > 0) {
+          const billingCounts: Record<string, number> = {};
+          for (const o of billableOutcomes) {
+            billingCounts[o.clerkUserId] =
+              (billingCounts[o.clerkUserId] || 0) + 1;
+          }
+
+          for (const [clerkId, count] of Object.entries(billingCounts)) {
+            await tx.user
+              .update({
+                where: { clerkId },
+                data: {
+                  creditLedger: {
+                    update: {
+                      creditsUsed: { increment: count },
+                    },
+                  },
+                },
+              })
+              .catch((err) => {
+                logger.error(
+                  { clerkId, err: err.message },
+                  "Failed to update CreditLedger in flusher",
+                );
+              });
+          }
         }
       });
 

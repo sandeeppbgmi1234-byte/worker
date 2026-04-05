@@ -199,6 +199,7 @@ async function runExecutionFlow(
       if (!resolvedAskRes.ok) {
         return {
           automationId: automation.id,
+          clerkUserId: wrapper.clerkUserId,
           eventId,
           status: "FAILED",
           errorMessage: resolvedAskRes.error.message,
@@ -226,6 +227,7 @@ async function runExecutionFlow(
 
         return {
           automationId: automation.id,
+          clerkUserId: wrapper.clerkUserId,
           eventId,
           status: "ASK_TO_FOLLOW_SENT",
           actionType: automation.actionType,
@@ -263,6 +265,7 @@ async function runExecutionFlow(
 
           return {
             automationId: automation.id,
+            clerkUserId: wrapper.clerkUserId,
             eventId,
             status: openRes.ok ? "OPENING_MESSAGE_SENT" : "FAILED",
             errorMessage: openRes.ok ? undefined : openRes.error.message,
@@ -321,6 +324,7 @@ async function runExecutionFlow(
 
           return {
             automationId: automation.id,
+            clerkUserId: wrapper.clerkUserId,
             eventId,
             status: "SUCCESS",
             actionType: automation.actionType,
@@ -333,6 +337,7 @@ async function runExecutionFlow(
 
         return {
           automationId: automation.id,
+          clerkUserId: wrapper.clerkUserId,
           eventId,
           status: "SKIPPED",
           actionType: automation.actionType,
@@ -345,6 +350,7 @@ async function runExecutionFlow(
       // If DM Delivery failed, we report the error (regardless of replyRes)
       return {
         automationId: automation.id,
+        clerkUserId: wrapper.clerkUserId,
         eventId,
         status: "FAILED",
         errorMessage: dmRes.error.message,

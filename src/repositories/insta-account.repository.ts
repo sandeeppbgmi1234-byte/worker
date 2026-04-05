@@ -13,27 +13,27 @@ const INSTA_ACCOUNT_SELECT = {
   user: { select: { clerkId: true } },
 } as const;
 
-export async function findInstaAccountByInstagramUserId(
-  instagramUserId: string,
+export async function findInstaAccountByPlatformId(
+  platformId: string,
 ): Promise<Result<any, DatabaseError>> {
-  const userIdString = String(instagramUserId);
+  const idString = String(platformId);
 
   const fallbackLookup = async () => {
     const byWebhookId = await prisma.instaAccount.findUnique({
-      where: { webhookUserId: userIdString },
+      where: { webhookUserId: idString },
       select: INSTA_ACCOUNT_SELECT,
     });
 
     if (byWebhookId) return byWebhookId;
 
     return prisma.instaAccount.findUnique({
-      where: { instagramUserId: userIdString },
+      where: { instagramUserId: idString },
       select: INSTA_ACCOUNT_SELECT,
     });
   };
 
   return executeWithErrorHandling(fallbackLookup, {
-    operation: "findInstaAccountByInstagramUserId",
+    operation: "findInstaAccountByPlatformId",
     model: "InstaAccount",
     retries: 1,
   });

@@ -96,6 +96,7 @@ export type RefinedEvent =
 export interface FilteredEvent {
   event: RefinedEvent;
   accountId: string;
+  clerkUserId: string;
   instagramUsername: string;
   matchedAutomations: Automation[];
 }
@@ -110,6 +111,7 @@ export interface GuardedEvent extends EnrichedEvent {
 
 export interface ExecutionOutcome {
   automationId: string;
+  clerkUserId: string;
   eventId: string;
   status:
     | "SUCCESS"

@@ -6,6 +6,7 @@ import { getRedisClient } from "../redis/client";
 import { KEYS } from "../redis/keys";
 import { logger } from "../logger";
 import { setEventHandledR } from "../redis/operations/event";
+import { incrementCreditUsedR } from "../redis/operations/credits";
 
 /**
  * Persists execution outcomes by pushing them to a Redis buffer (Write-Behind).
@@ -48,6 +49,15 @@ export async function persistOutcomes(
     // Now that outcomes are safely buffered, mark events as permanently handled
     const uniqueEventIds = Array.from(new Set(outcomes.map((o) => o.eventId)));
     await Promise.all(uniqueEventIds.map((id) => setEventHandledR(id)));
+
+    // Increment credits in Redis for all billable successes
+    const billableOutcomes = outcomes.filter((o) =>
+      ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(o.status),
+    );
+
+    await Promise.all(
+      billableOutcomes.map((o) => incrementCreditUsedR(o.clerkUserId)),
+    );
 
     return ok(undefined);
   } catch (error: any) {

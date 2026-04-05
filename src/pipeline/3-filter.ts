@@ -111,6 +111,7 @@ export async function filterEvents(
                   event: eventWrapper,
                   accountId: accountResult.id,
                   clerkUserId: accountResult.user.clerkId,
+                  userId: accountResult.userId,
                   instagramUsername: accountResult.username,
                   matchedAutomations: [automation],
                 } as FilteredEvent;
@@ -170,6 +171,7 @@ export async function filterEvents(
             event: eventWrapper,
             accountId: accountResult.id,
             clerkUserId: accountResult.user.clerkId,
+            userId: accountResult.userId,
             instagramUsername: accountResult.username,
             matchedAutomations: matches,
           } as FilteredEvent;

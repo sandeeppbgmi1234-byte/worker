@@ -14,11 +14,15 @@ import { Automation } from "@prisma/client";
 import { getCreditStateR, setCreditStateR } from "../redis/operations/credits";
 import { addNotificationJob } from "../queues/notifications";
 import { prisma } from "../db/db";
+import { logger } from "../logger";
 
 export async function guardEvents(
   enrichedEvents: EnrichedEvent[],
 ): Promise<Result<GuardedEvent[], GuardError>> {
-  // Cache for multi-event batches sharing the same owner
+  // Cache for multi-event batches sharing the same owner.
+  // Note: We use Eventual Consistency for billing. Redis credits are incremented by the
+  // Persistence Flusher ONLY after a successful DB commit to prevent drift.
+  // TOCTOU Mitigation: 'ownerStateCache' allows batch-level local reservations to catch bursts.
   const ownerStateCache = new Map<
     string,
     { used: number; limit: number; status: string }
@@ -26,10 +30,10 @@ export async function guardEvents(
 
   const guardResults = await Promise.all(
     enrichedEvents.map(async (wrapper) => {
-      const clerkUserId = wrapper.clerkUserId;
+      const { clerkUserId, userId: ownerId } = wrapper;
 
       // 1. Resolve Billing State (Redis-first with DB fallback)
-      let state = ownerStateCache.get(clerkUserId);
+      let state = ownerStateCache.get(ownerId);
       if (!state) {
         const cached = await getCreditStateR(clerkUserId);
         if (
@@ -45,19 +49,25 @@ export async function guardEvents(
         } else {
           // Self-healing: Read from DB
           const userWithSub = await prisma.user.findUnique({
-            where: { clerkId: clerkUserId },
+            where: { id: ownerId },
             include: {
               subscription: true,
               creditLedger: true,
             },
           });
 
-          if (!userWithSub) return null; // Should never happen
+          if (!userWithSub) {
+            logger.warn(
+              { ownerId, clerkUserId, event: wrapper.event.type },
+              "Billing check failed: User record not found for ownerId — skipping event",
+            );
+            return null;
+          }
 
           state = {
             used: userWithSub.creditLedger?.creditsUsed ?? 0,
-            limit: userWithSub.creditLedger?.creditLimit ?? 0,
-            status: userWithSub.subscription?.status ?? "EXPIRED",
+            limit: userWithSub.creditLedger?.creditLimit ?? 1000, // Default to FREE limit
+            status: userWithSub.subscription?.status ?? "ACTIVE", // Default to ACTIVE
           };
 
           // Restore Redis
@@ -68,7 +78,7 @@ export async function guardEvents(
             state.status,
           );
         }
-        ownerStateCache.set(clerkUserId, state);
+        ownerStateCache.set(ownerId, state);
       }
 
       // 2. Enforce Status & Quota
@@ -85,6 +95,9 @@ export async function guardEvents(
         });
         return null;
       }
+
+      // 3. Batch-level TOCTOU mitigation: Perform local reservation
+      state.used += 1;
 
       const safeAutomations = [];
       let userId = "";

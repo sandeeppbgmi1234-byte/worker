@@ -20,10 +20,20 @@ export async function getCreditStateR(clerkUserId: string): Promise<{
       KEYS.SUB_STATUS(clerkUserId),
     );
 
+    const parsedUsed = used !== null ? parseInt(used, 10) : null;
+    const parsedLimit = limit !== null ? parseInt(limit, 10) : null;
+
+    // Canonical status validation as per plans.config
+    const ALLOWED_STATUSES = ["ACTIVE", "EXPIRED", "SOFT_PAUSED"];
+    const validatedStatus =
+      status && ALLOWED_STATUSES.includes(status) ? status : null;
+
     return {
-      creditsUsed: used !== null ? parseInt(used, 10) : null,
-      creditLimit: limit !== null ? parseInt(limit, 10) : null,
-      subStatus: status,
+      creditsUsed:
+        parsedUsed !== null && !isNaN(parsedUsed) ? parsedUsed : null,
+      creditLimit:
+        parsedLimit !== null && !isNaN(parsedLimit) ? parsedLimit : null,
+      subStatus: validatedStatus,
     };
   } catch (error: any) {
     logger.warn({ error, clerkUserId }, "getCreditStateR failed");
@@ -45,7 +55,8 @@ export async function setCreditStateR(
 
   try {
     const pipeline = redis.pipeline();
-    pipeline.set(KEYS.CREDIT_USED(clerkUserId), creditsUsed.toString());
+    // Only set used if it doesn't exist (prevent overwriting active increments)
+    pipeline.set(KEYS.CREDIT_USED(clerkUserId), creditsUsed.toString(), "NX");
     pipeline.set(KEYS.CREDIT_LIMIT(clerkUserId), creditLimit.toString());
     pipeline.set(KEYS.SUB_STATUS(clerkUserId), subStatus);
     await pipeline.exec();
@@ -64,6 +75,18 @@ export async function incrementCreditUsedR(clerkUserId: string): Promise<void> {
   try {
     await redis.incr(KEYS.CREDIT_USED(clerkUserId));
   } catch (error: any) {
-    logger.warn({ error, clerkUserId }, "incrementCreditUsedR failed");
+    logger.error(
+      { error: error.message, clerkUserId },
+      "Redis incrementCreditUsedR failed. Invalidating cache to trigger self-healing.",
+    );
+    // Invalidate everything for this user so the guard or flusher rebuilds from DB
+    await redis
+      .del(
+        KEYS.CREDIT_USED(clerkUserId),
+        KEYS.CREDIT_LIMIT(clerkUserId),
+        KEYS.SUB_STATUS(clerkUserId),
+      )
+      .catch(() => {});
+    throw error;
   }
 }

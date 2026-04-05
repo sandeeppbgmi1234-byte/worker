@@ -137,17 +137,18 @@ model Automation {
 
   useVariables Boolean @default(true)
 
-  status          String    @default("ACTIVE") // ACTIVE, PAUSED, DELETED
-  timesTriggered  Int       @default(0)
-  lastTriggeredAt DateTime?
+  status            String    @default("ACTIVE") // ACTIVE, PAUSED, DELETED
+  timesTriggered    Int       @default(0)
+  triggersSignature String?
+  lastTriggeredAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   executions AutomationExecution[]
 
-  @@unique([instaAccountId, automationName])
-  @@unique([instaAccountId, targetId, targetType, triggers])
+  @@unique([instaAccountId, automationName, status])
+  @@unique([instaAccountId, targetId, targetType, triggersSignature, status])
   @@index([instaAccountId, status])
   @@index([instaAccountId, triggerType, status])
   @@map("automations")
@@ -167,11 +168,11 @@ model AutomationExecution {
   // Execution details
   actionType         String // DM or COMMENT_REPLY
   sentMessage        String
+  instagramMessageId String? // For tracking
   status             String // SUCCESS, FAILED, PENDING
   errorMessage       String?
-  instagramMessageId String? // For tracking
-
-  executedAt DateTime @default(now())
+  executedAt         DateTime @default(now())
+  billed             Boolean  @default(false)
 
   @@unique([commentId, automationId])
   @@index([automationId, status])
@@ -289,7 +290,8 @@ model CreditLedger {
   periodEnd   DateTime
 
   // Tracks whether the quota-full email has been sent this period
-  quotaEmailSentAt DateTime?
+  quotaEmailSentAt    DateTime?
+  quotaEmailSendingAt DateTime?
 
   updatedAt DateTime @updatedAt
 

@@ -3,6 +3,8 @@ import { KEYS } from "../redis/keys";
 import { logger } from "../logger";
 import { prisma } from "../db/db";
 import { ExecutionOutcome } from "../types";
+import { getCreditLimitForPlan } from "../config/plans.config";
+import { incrementCreditUsedR } from "../redis/operations/credits";
 
 const FLUSH_BATCH_SIZE = 500;
 const FLUSH_INTERVAL_MS = 5000; // 5 seconds
@@ -50,7 +52,6 @@ async function flushBufferToDb() {
 
   try {
     // 1. Move items to processing key to ensure atomicity
-    // We use a simple RENAME if processing key is empty
     const exists = await redis.exists(KEYS.PENDING_OUTCOMES);
     if (!exists) {
       isFlushing = false;
@@ -92,15 +93,27 @@ async function flushBufferToDb() {
     }
 
     // Process the batch (either fresh or stranded)
-    const outcomes = items.map(
+    const rawOutcomes = items.map(
       (i: string) => JSON.parse(i) as ExecutionOutcome,
     );
 
+    // DEDUPLICATION
+    const dedupedMap = new Map<string, ExecutionOutcome>();
+    for (const o of rawOutcomes) {
+      const key = `${o.eventId || "unknown_event"}|${o.automationId}`;
+      const existing = dedupedMap.get(key);
+      if (!existing || o.status === "SUCCESS") {
+        dedupedMap.set(key, o);
+      }
+    }
+    const outcomes = Array.from(dedupedMap.values());
+
     // 2. Perform bulk write to DB
+    const finalSynchronizedBillable: ExecutionOutcome[] = [];
+
     try {
       await prisma.$transaction(async (tx) => {
         // Idempotent UPSERT for each outcome
-        // This handles transitions (e.g. OPENING_MESSAGE_SENT -> SUCCESS) on the same comment
         await Promise.all(
           outcomes.map((o: ExecutionOutcome) =>
             tx.automationExecution.upsert({
@@ -131,12 +144,100 @@ async function flushBufferToDb() {
                 errorMessage: o.errorMessage ?? "",
                 instagramMessageId: o.instagramMessageId ?? "",
                 executedAt: new Date(),
+                billed: false,
               },
             }),
           ),
         );
 
-        // Update automation triggered counts using a Frequency Map (O(n) instead of O(n^2))
+        // Fetch executions to check their 'billed' status
+        const dbExecutions = await tx.automationExecution.findMany({
+          where: {
+            OR: outcomes.map((o) => ({
+              commentId: o.eventId || "unknown_event",
+              automationId: o.automationId,
+            })),
+          },
+          select: { commentId: true, automationId: true, billed: true },
+        });
+
+        const billedMap = new Map(
+          dbExecutions.map((e) => [
+            `${e.commentId}:${e.automationId}`,
+            e.billed,
+          ]),
+        );
+
+        const newlyBillable = outcomes.filter((o) => {
+          const key = `${o.eventId || "unknown_event"}:${o.automationId}`;
+          const alreadyBilled = billedMap.get(key) ?? false;
+          return (
+            ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(o.status) &&
+            !alreadyBilled
+          );
+        });
+
+        if (newlyBillable.length > 0) {
+          const billingCounts: Record<string, number> = {};
+          for (const o of newlyBillable) {
+            billingCounts[o.clerkUserId] =
+              (billingCounts[o.clerkUserId] || 0) + 1;
+          }
+
+          for (const [clerkId, count] of Object.entries(billingCounts)) {
+            const userState = await tx.user.findUnique({
+              where: { clerkId },
+              include: { subscription: true },
+            });
+
+            if (!userState) {
+              logger.warn(
+                { clerkId, pendingCount: count },
+                "Persistence Flusher: Billable outcomes found but user record missing. Skipping billing.",
+              );
+              continue;
+            }
+
+            const sub = userState.subscription;
+            const creditLimit = getCreditLimitForPlan(sub?.plan);
+
+            await tx.creditLedger.upsert({
+              where: { userId: userState.id },
+              create: {
+                userId: userState.id,
+                creditsUsed: count,
+                creditLimit,
+                periodStart: sub?.currentPeriodStart ?? new Date(),
+                periodEnd:
+                  sub?.currentPeriodEnd ??
+                  new Date(Date.now() + 28 * 24 * 60 * 60 * 1000),
+              },
+              update: {
+                creditsUsed: { increment: count },
+              },
+            });
+          }
+
+          // Mark as billed
+          await Promise.all(
+            newlyBillable.map((o) =>
+              tx.automationExecution.update({
+                where: {
+                  commentId_automationId: {
+                    commentId: o.eventId || "unknown_event",
+                    automationId: o.automationId,
+                  },
+                },
+                data: { billed: true },
+              }),
+            ),
+          );
+
+          // Collect for Redis sync
+          finalSynchronizedBillable.push(...newlyBillable);
+        }
+
+        // Update automation triggered counts
         const successIds = outcomes
           .filter((o: ExecutionOutcome) => o.status === "SUCCESS")
           .map((o: ExecutionOutcome) => o.automationId);
@@ -155,56 +256,28 @@ async function flushBufferToDb() {
             },
           });
         }
-
-        // --- BILLING SYNC: Aggregate and update CreditLedger ---
-        const billableOutcomes = outcomes.filter((o: ExecutionOutcome) =>
-          ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(o.status),
-        );
-
-        if (billableOutcomes.length > 0) {
-          const billingCounts: Record<string, number> = {};
-          for (const o of billableOutcomes) {
-            billingCounts[o.clerkUserId] =
-              (billingCounts[o.clerkUserId] || 0) + 1;
-          }
-
-          for (const [clerkId, count] of Object.entries(billingCounts)) {
-            await tx.user
-              .update({
-                where: { clerkId },
-                data: {
-                  creditLedger: {
-                    update: {
-                      creditsUsed: { increment: count },
-                    },
-                  },
-                },
-              })
-              .catch((err) => {
-                logger.error(
-                  { clerkId, err: err.message },
-                  "Failed to update CreditLedger in flusher",
-                );
-              });
-          }
-        }
       });
 
       // 3. Clear the Vault AFTER successful DB write
       await redis.del(PROCESSING_KEY);
 
+      // 4. Redis Post-Commit Sync (Eventual Consistency)
+      if (finalSynchronizedBillable.length > 0) {
+        await Promise.allSettled(
+          finalSynchronizedBillable.map((o) =>
+            incrementCreditUsedR(o.clerkUserId).catch(() => {}),
+          ),
+        );
+      }
+
       logger.info(
         { count: outcomes.length },
-        "Persistence Flusher: Successfully synced outcomes to database from vault",
+        "Persistence Flusher: Successfully synced outcomes to database",
       );
     } catch (dbError: any) {
       logger.error(
-        {
-          error: dbError.message,
-          batchSize: outcomes.length,
-          code: dbError.code,
-        },
-        "Persistence Flusher: CRITICAL - Failed to sync batch to database. Data remains in Redis buffer for retry.",
+        { error: dbError.message, batchSize: outcomes.length },
+        "Persistence Flusher: Failed to sync batch to database",
       );
     }
   } catch (error: any) {

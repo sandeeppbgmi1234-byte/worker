@@ -13,8 +13,9 @@ export function getNotificationsQueue(): Queue {
     notificationsQueue = new Queue(KEYS.NOTIFICATIONS_QUEUE, {
       connection: QUEUE_CONNECTION,
       defaultJobOptions: {
-        removeOnComplete: true,
-        removeOnFail: 1000,
+        removeOnComplete: { age: 600 },
+        removeOnFail: { age: 24 * 3600 }, // Keep failed for 24h
+
         attempts: 3,
         backoff: {
           type: "exponential",
@@ -43,7 +44,7 @@ export async function addNotificationJob(payload: NotificationPayload) {
     const windowId = Math.floor(Date.now() / windowInMs);
 
     await queue.add(payload.type, payload, {
-      jobId: `quota_full:${payload.userId}:${windowId}`,
+      jobId: `quota_full-${payload.userId}-${windowId}`,
     });
   } catch (err: any) {
     logger.error(

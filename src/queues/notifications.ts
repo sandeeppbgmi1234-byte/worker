@@ -43,9 +43,14 @@ export async function addNotificationJob(payload: NotificationPayload) {
     const windowInMs = 10 * 60 * 1000; // 10 minute deduplication window
     const windowId = Math.floor(Date.now() / windowInMs);
 
+    const jobId = `quota_full-${payload.userId}-${windowId}`;
     await queue.add(payload.type, payload, {
-      jobId: `quota_full-${payload.userId}-${windowId}`,
+      jobId,
     });
+    logger.info(
+      { userId: payload.userId, jobId },
+      "Notification job added to queue",
+    );
   } catch (err: any) {
     logger.error(
       { userId: payload.userId, err: err.message },

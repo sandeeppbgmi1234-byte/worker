@@ -17,6 +17,8 @@ model User {
   instaAccounts InstaAccount[]
   automations   Automation[]
   forms         Form[]
+  subscription  Subscription?
+  creditLedger  CreditLedger?
 
   @@map("users")
 }
@@ -107,9 +109,11 @@ model Automation {
   instaAccount   InstaAccount @relation(fields: [instaAccountId], references: [id], onDelete: Cascade)
 
   triggerType    String       @default("COMMENT_ON_POST") // COMMENT_ON_POST | STORY_REPLY
-  automationName String?
+  automationName String
   post           PostTarget?
   story          StoryTarget?
+  targetId       String? // Computed field for indexing: postId, storyId, or 'account'
+  targetType     String? // Computed field for indexing: post, story, or 'account'
 
   // Trigger configuration
   triggers           String[] // Keywords/phrases to match
@@ -133,15 +137,18 @@ model Automation {
 
   useVariables Boolean @default(true)
 
-  status          String    @default("ACTIVE") // ACTIVE, PAUSED, DELETED
-  timesTriggered  Int       @default(0)
-  lastTriggeredAt DateTime?
+  status            String    @default("ACTIVE") // ACTIVE, PAUSED, DELETED
+  timesTriggered    Int       @default(0)
+  triggersSignature String?
+  lastTriggeredAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   executions AutomationExecution[]
 
+  @@unique([instaAccountId, automationName, status])
+  @@unique([instaAccountId, targetId, targetType, triggersSignature, status])
   @@index([instaAccountId, status])
   @@index([instaAccountId, triggerType, status])
   @@map("automations")
@@ -161,11 +168,11 @@ model AutomationExecution {
   // Execution details
   actionType         String // DM or COMMENT_REPLY
   sentMessage        String
+  instagramMessageId String? // For tracking
   status             String // SUCCESS, FAILED, PENDING
   errorMessage       String?
-  instagramMessageId String? // For tracking
-
-  executedAt DateTime @default(now())
+  executedAt         DateTime @default(now())
+  billed             Boolean  @default(false)
 
   @@unique([commentId, automationId])
   @@index([automationId, status])
@@ -245,4 +252,57 @@ model FormSubmission {
 type DmLink {
   title String
   url   String
+}
+
+// Tracks the user's current plan and billing period
+model Subscription {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @unique @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Plan & status
+  plan   String // FREE | BASIC | PREMIUM | BLACK
+  status String // ACTIVE | EXPIRED | SOFT_PAUSED
+
+  // Razorpay identifiers (null for FREE plan)
+  razorpaySubscriptionId String?
+  razorpayPlanId         String?
+
+  // 28-day billing window (period=weekly, interval=4)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("subscriptions")
+}
+
+// Rolling credit counter per billing period
+model CreditLedger {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @unique @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  creditsUsed Int      @default(0)
+  creditLimit Int // -1 = unlimited (Black plan)
+  periodStart DateTime
+  periodEnd   DateTime
+
+  // Tracks whether the quota-full email has been sent this period
+  quotaEmailSentAt    DateTime?
+  quotaEmailSendingAt DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  @@map("credit_ledgers")
+}
+
+// Idempotency store — prevents double-processing Razorpay webhook events
+model ProcessedWebhookEvent {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  razorpayEventId String   @unique
+  processedAt     DateTime @default(now())
+
+  @@map("processed_webhook_events")
 }

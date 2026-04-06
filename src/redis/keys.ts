@@ -17,6 +17,7 @@ export const TTL = {
   PENDING_CONFIRMATION: 5 * 60, // 5 minutes
   ASK_RESOLVED: 24 * 60 * 60, // 24 hours
   FOLLOW_WARNING: 60 * 60, // 1 hour
+  // Billing: no TTL — these persist for the lifetime of the subscription
 } as const;
 
 // Key generation functions — all IG-scoped keys use instaAccountId, not userId
@@ -78,4 +79,12 @@ export const KEYS = {
 
   // Domain: Buffers (Async Persistence)
   PENDING_OUTCOMES: "pending:outcomes:buffer",
+
+  // Domain: Billing / Credits (keyed by main app userId)
+  // Worker reads/writes these; Main App sets them on plan changes.
+  CREDIT_USED: (userId: string) => `billing:credits:used:${userId}`,
+  CREDIT_LIMIT: (userId: string) => `billing:credits:limit:${userId}`,
+  SUB_STATUS: (userId: string) => `billing:sub:status:${userId}`,
+  // Domain: Notifications (BullMQ)
+  NOTIFICATIONS_QUEUE: "notifications",
 } as const;

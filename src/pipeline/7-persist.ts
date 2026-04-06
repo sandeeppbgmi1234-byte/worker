@@ -6,6 +6,8 @@ import { getRedisClient } from "../redis/client";
 import { KEYS } from "../redis/keys";
 import { logger } from "../logger";
 import { setEventHandledR } from "../redis/operations/event";
+import { incrementCreditUsedR } from "../redis/operations/credits";
+import { getCreditLimitForPlan } from "../config/plans.config";
 
 /**
  * Persists execution outcomes by pushing them to a Redis buffer (Write-Behind).
@@ -49,6 +51,9 @@ export async function persistOutcomes(
     const uniqueEventIds = Array.from(new Set(outcomes.map((o) => o.eventId)));
     await Promise.all(uniqueEventIds.map((id) => setEventHandledR(id)));
 
+    // Redis credits are now incremented by the Persistence Flusher after DB commit
+    // to maintain strict consistency and prevent drifts on flusher crashes.
+
     return ok(undefined);
   } catch (error: any) {
     logger.error(
@@ -72,6 +77,10 @@ async function persistOutcomesSync(
     try {
       await executeTransaction(
         async (tx) => {
+          const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
+            outcome.status,
+          );
+
           await tx.automationExecution.create({
             data: {
               automationId: outcome.automationId,
@@ -91,8 +100,38 @@ async function persistOutcomesSync(
               errorMessage: outcome.errorMessage || "",
               instagramMessageId: outcome.instagramMessageId || "",
               executedAt: new Date(),
+              billed: isBillable,
             },
           });
+
+          if (isBillable) {
+            // AUTHORITATIVE BILLING: Update DB ledger inside transaction
+            const userState = await tx.user.findUnique({
+              where: { clerkId: outcome.clerkUserId },
+              include: { subscription: true },
+            });
+
+            if (userState) {
+              const sub = userState.subscription;
+              const creditLimit = getCreditLimitForPlan(sub?.plan);
+
+              await tx.creditLedger.upsert({
+                where: { userId: userState.id },
+                create: {
+                  userId: userState.id,
+                  creditsUsed: 1,
+                  creditLimit,
+                  periodStart: sub?.currentPeriodStart ?? new Date(),
+                  periodEnd:
+                    sub?.currentPeriodEnd ??
+                    new Date(Date.now() + 28 * 24 * 60 * 60 * 1000),
+                },
+                update: {
+                  creditsUsed: { increment: 1 },
+                },
+              });
+            }
+          }
 
           if (outcome.status === "SUCCESS") {
             await tx.automation.update({
@@ -111,9 +150,19 @@ async function persistOutcomesSync(
         },
         {
           operation: "persistPipelineOutcomeSync",
-          models: ["AutomationExecution", "Automation"],
+          models: ["AutomationExecution", "Automation", "CreditLedger"],
         },
       );
+
+      // POST-COMMIT: Update Redis cache if available
+      const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
+        outcome.status,
+      );
+      if (isBillable) {
+        await incrementCreditUsedR(outcome.clerkUserId).catch(() => {
+          // Swallow Redis errors here as the DB is already durable
+        });
+      }
     } catch (error: any) {
       hasFailure = true;
       lastError = error;

@@ -5,7 +5,7 @@ import {
   getAutomationByIdR,
   getAutomationsForAccountDMR,
 } from "../redis/operations/automation";
-import { findInstaAccountByInstagramUserId } from "../repositories/insta-account.repository";
+import { findInstaAccountByPlatformId } from "../repositories/insta-account.repository";
 import {
   findActiveAutomationsByPost,
   findActiveAutomationsByStory,
@@ -29,7 +29,7 @@ export async function filterEvents(
         const accountResult = await getAccountByInstagramIdR(
           igUserId,
           async () => {
-            const res = await findInstaAccountByInstagramUserId(igUserId);
+            const res = await findInstaAccountByPlatformId(igUserId);
             return res.ok ? res.value : null;
           },
         );
@@ -104,11 +104,14 @@ export async function filterEvents(
               // This prevents cross-account binding via crafted or stale payloads.
               if (
                 automation &&
-                automation.instaAccountId === accountResult.id
+                automation.instaAccountId === accountResult.id &&
+                automation.status === "ACTIVE"
               ) {
                 return {
                   event: eventWrapper,
                   accountId: accountResult.id,
+                  clerkUserId: accountResult.user.clerkId,
+                  userId: accountResult.userId,
                   instagramUsername: accountResult.username,
                   matchedAutomations: [automation],
                 } as FilteredEvent;
@@ -167,6 +170,8 @@ export async function filterEvents(
           return {
             event: eventWrapper,
             accountId: accountResult.id,
+            clerkUserId: accountResult.user.clerkId,
+            userId: accountResult.userId,
             instagramUsername: accountResult.username,
             matchedAutomations: matches,
           } as FilteredEvent;

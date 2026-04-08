@@ -80,7 +80,7 @@ export function processMessagingEntry(
     // 3. Fallback: Standard Direct Message (Text-based)
     if (!processed && msg.message?.text && msg.message?.mid && msg.sender?.id) {
       events.push({
-        type: "DIRECT_MESSAGE",
+        type: "DM_MESSAGE",
         webhookId: entry.id,
         time: entry.time,
         instagramUserId,

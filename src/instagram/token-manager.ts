@@ -2,7 +2,7 @@ import { prisma } from "../db/db";
 import { ERROR_MESSAGES } from "../config/instagram.config";
 import { fetchFromInstagram } from "./gateway";
 import { RefreshTokenResponse } from "../types/instagram.types";
-import { clearAccountCacheR } from "../redis/operations/user";
+import { invalidateUserCacheR } from "../redis/operations/user";
 import { logger } from "../logger";
 import { InstagramTokenExpiredError } from "../errors/instagram.errors";
 
@@ -11,6 +11,7 @@ export async function refreshAccessToken(
 ): Promise<{ accessToken: string; expiresAt: Date }> {
   const account = await prisma.instaAccount.findUnique({
     where: { id: accountId },
+    include: { user: { select: { clerkId: true } } },
   });
   if (!account) throw new Error(ERROR_MESSAGES.AUTH.NO_INSTAGRAM_ACCOUNT);
 
@@ -77,7 +78,10 @@ export async function refreshAccessToken(
 
       // Best-effort cache cleanup
       try {
-        await clearAccountCacheR(accountId, account.instagramUserId);
+        await invalidateUserCacheR(
+          account.user?.clerkId || "",
+          account.webhookUserId || "",
+        );
       } catch (cacheError: any) {
         logger.error(
           { accountId, error: cacheError.message },

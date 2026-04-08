@@ -114,6 +114,7 @@ export async function executeAskToFollow(
         profileUrl,
       },
       automation.id,
+      event.id || "untracked",
     );
 
     const result = await fetchFromInstagram<any>(msgUrl.toString(), {

@@ -48,8 +48,12 @@ export async function persistOutcomes(
     }
 
     // Now that outcomes are safely buffered, mark events as permanently handled
-    const uniqueEventIds = Array.from(new Set(outcomes.map((o) => o.eventId)));
-    await Promise.all(uniqueEventIds.map((id) => setEventHandledR(id)));
+    const uniqueEvents = Array.from(
+      new Map(outcomes.map((o) => [o.eventId, o])).values(),
+    );
+    await Promise.all(
+      uniqueEvents.map((o) => setEventHandledR(o.webhookUserId, o.eventId)),
+    );
 
     return ok(undefined);
   } catch (error: any) {
@@ -72,12 +76,12 @@ async function persistOutcomesSync(
 
   for (const outcome of outcomes) {
     try {
+      const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
+        outcome.status,
+      );
+
       await executeTransaction(
         async (tx) => {
-          const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
-            outcome.status,
-          );
-
           await tx.automationExecution.create({
             data: {
               automationId: outcome.automationId,
@@ -142,7 +146,7 @@ async function persistOutcomesSync(
 
           // Mark as handled after successful DB write
           if (outcome.eventId) {
-            await setEventHandledR(outcome.eventId);
+            await setEventHandledR(outcome.webhookUserId, outcome.eventId);
           }
         },
         {

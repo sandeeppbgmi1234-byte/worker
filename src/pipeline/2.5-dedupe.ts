@@ -30,11 +30,17 @@ export async function dedupeEvents(
 
     if (eventId) {
       // 1. Check Permanent Handled Mark
-      const alreadyHandled = await isEventHandledR(eventId);
+      const alreadyHandled = await isEventHandledR(
+        eventWrapper.instagramUserId,
+        eventId,
+      );
       if (alreadyHandled) continue;
 
       // 2. Acquire Soft Processing Lock
-      const lockRes = await acquireEventLockR(eventId);
+      const lockRes = await acquireEventLockR(
+        eventWrapper.instagramUserId,
+        eventId,
+      );
       if (lockRes === "LOCKED") continue;
       if (lockRes === "ERROR") {
         throw new GuardError(

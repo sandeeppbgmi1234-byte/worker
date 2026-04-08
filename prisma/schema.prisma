@@ -137,18 +137,11 @@ model Automation {
 
   useVariables Boolean @default(true)
 
-<<<<<<< Updated upstream
-  status            String    @default("ACTIVE") // ACTIVE, PAUSED, DELETED
-  timesTriggered    Int       @default(0)
-  triggersSignature String?
-  lastTriggeredAt   DateTime?
-=======
   status            String @default("ACTIVE") // ACTIVE, PAUSED, DELETED
   timesTriggered    Int    @default(0)
   triggersSignature String @default("")
 
   lastTriggeredAt DateTime?
->>>>>>> Stashed changes
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

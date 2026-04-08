@@ -115,6 +115,7 @@ export interface ExecutionOutcome {
   automationId: string;
   userId: string; // Mongo ID of User
   clerkUserId: string; // Clerk ID (user_...)
+  webhookUserId: string; // Instagram Webhook ID (178...)
   eventId: string;
 
   status:

@@ -4,8 +4,11 @@ import { logger } from "../../logger";
 import { RATE_LIMIT_THRESHOLDS } from "../../config/instagram.config";
 import { InstagramRateLimitError } from "../../errors/instagram.errors";
 
+/**
+ * Updates Meta API rate limits from response headers.
+ */
 export async function updateRateLimitsFromHeadersR(
-  instagramUserId: string,
+  webhookUserId: string,
   appUsage: Record<string, any> | null,
   businessUsage: Record<string, any> | null,
   adAccountUsage?: Record<string, any> | null,
@@ -24,11 +27,11 @@ export async function updateRateLimitsFromHeadersR(
         appUsage.total_cputime || 0,
       );
       if (usage > 0) {
-        pipeline.set(KEYS.APP_USAGE(), usage, "EX", TTL.API_USAGE);
+        pipeline.set(KEYS.APP_USAGE(), usage.toString(), "EX", TTL.API_USAGE);
       }
     }
 
-    // 2. Business Usage
+    // 2. Business Usage (Account-Level)
     if (businessUsage) {
       let maxAccountUsage = 0;
       for (const key of Object.keys(businessUsage)) {
@@ -45,35 +48,43 @@ export async function updateRateLimitsFromHeadersR(
       }
       if (maxAccountUsage > 0)
         pipeline.set(
-          KEYS.ACCOUNT_USAGE(instagramUserId),
-          maxAccountUsage,
+          KEYS.ACCOUNT_USAGE(webhookUserId),
+          maxAccountUsage.toString(),
           "EX",
           TTL.API_USAGE,
         );
     }
 
-    // 3. Ad Account Usage
+    // 3. Ad Account Usage (Fallback)
     if (adAccountUsage && adAccountUsage.acc_id_util_pct) {
       const usage = Math.round(adAccountUsage.acc_id_util_pct);
       pipeline.set(
-        KEYS.ACCOUNT_USAGE(instagramUserId),
-        usage,
+        KEYS.ACCOUNT_USAGE(webhookUserId),
+        usage.toString(),
         "EX",
         TTL.API_USAGE,
       );
     }
 
     await pipeline.exec();
-  } catch (error: any) {}
+  } catch (error: any) {
+    logger.debug(
+      { error: error.message },
+      "Failed to update rate limit headers in Redis",
+    );
+  }
 }
 
-export async function checkRateLimits(instagramUserId: string): Promise<void> {
+/**
+ * Checks if current usage is below safety thresholds.
+ */
+export async function checkRateLimits(webhookUserId: string): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
   const [appUsageStr, accountUsageStr] = await redis.mget(
     KEYS.APP_USAGE(),
-    KEYS.ACCOUNT_USAGE(instagramUserId),
+    KEYS.ACCOUNT_USAGE(webhookUserId),
   );
   const appUsage = appUsageStr ? parseInt(appUsageStr, 10) : 0;
   const accountUsage = accountUsageStr ? parseInt(accountUsageStr, 10) : 0;
@@ -95,18 +106,26 @@ export async function checkRateLimits(instagramUserId: string): Promise<void> {
   }
 }
 
+/**
+ * Increments predicted usage for short-term throttling.
+ */
 export async function incrementApiUsage(
-  instagramUserId: string,
+  webhookUserId: string,
   count: number = 1,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.PREDICTED_USAGE(instagramUserId);
+  const key = KEYS.PREDICTED_USAGE(webhookUserId);
   try {
     const pipeline = redis.pipeline();
     pipeline.incrby(key, count);
     pipeline.expire(key, TTL.API_USAGE);
     await pipeline.exec();
-  } catch (error: any) {}
+  } catch (error: any) {
+    logger.debug(
+      { error: error.message },
+      "Failed to increment predicted API usage",
+    );
+  }
 }

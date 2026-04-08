@@ -5,19 +5,43 @@ export {
   isUserConnectedR,
   setUserConnectedR,
   getAccountByInstagramIdR,
-} from "./operations/user.ts";
-export { getAccessTokenR, cacheAccessTokenR } from "./operations/token.ts";
-export { isCommentProcessedR } from "./operations/comment.ts";
+  invalidateUserCacheR,
+} from "./operations/user";
+
+export { getAccessTokenR, cacheAccessTokenR } from "./operations/token";
+
+export { isCommentProcessedR } from "./operations/comment";
+
 export {
   isUserOnCooldownR,
   clearUserCooldownR,
-} from "./operations/cooldown.ts";
+  isFollowWarningSentR,
+  setFollowWarningSentR,
+  isPendingConfirmationR,
+  setPendingConfirmationR,
+  clearPendingConfirmationR,
+  isUserThrottledR,
+  isEventThrottledR,
+  isAskResolvedR,
+  setAskResolvedR,
+  clearAskResolvedR,
+} from "./operations/cooldown";
+
 export {
   updateRateLimitsFromHeadersR,
   checkRateLimits,
   incrementApiUsage,
-} from "./operations/rate-limit.ts";
+} from "./operations/rate-limit";
+
 export {
   getAutomationsByPostR,
   getAutomationsByStoryR,
-} from "./operations/automation.ts";
+  getAutomationByIdR,
+  getAutomationsForAccountDMR,
+} from "./operations/automation";
+
+export {
+  getCreditStateR,
+  setCreditStateR,
+  incrementCreditUsedR,
+} from "./operations/credits";

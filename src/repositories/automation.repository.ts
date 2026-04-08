@@ -16,7 +16,10 @@ export async function findActiveAutomationsByPost(
           post: { is: { id: postId } },
           status: "ACTIVE",
         },
+<<<<<<< Updated upstream
         orderBy: { createdAt: "desc" },
+=======
+>>>>>>> Stashed changes
       });
       return result;
     },
@@ -40,12 +43,37 @@ export async function findActiveAutomationsByStory(
           story: { is: { id: storyId } },
           status: "ACTIVE",
         },
+<<<<<<< Updated upstream
         orderBy: { createdAt: "desc" },
+=======
+>>>>>>> Stashed changes
       });
       return result;
     },
     {
       operation: "findActiveAutomationsByStory",
+      model: "Automation",
+      retries: 1,
+    },
+  );
+}
+
+export async function findActiveAutomationsByAccount(
+  instaAccountId: string,
+): Promise<Result<Automation[], DatabaseError>> {
+  return executeWithErrorHandling(
+    async () => {
+      const result = await prisma.automation.findMany({
+        where: {
+          instaAccountId,
+          triggerType: "RESPOND_TO_ALL_DMS",
+          status: "ACTIVE",
+        },
+      });
+      return result;
+    },
+    {
+      operation: "findActiveAutomationsByAccount",
       model: "Automation",
       retries: 1,
     },

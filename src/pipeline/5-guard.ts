@@ -1,5 +1,4 @@
 import { EnrichedEvent, GuardedEvent } from "../types";
-import { isCommentProcessedR } from "../redis/operations/comment";
 import {
   isUserOnCooldownR,
   isUserThrottledR,
@@ -20,9 +19,6 @@ export async function guardEvents(
   enrichedEvents: EnrichedEvent[],
 ): Promise<Result<GuardedEvent[], GuardError>> {
   // Cache for multi-event batches sharing the same owner.
-  // Note: We use Eventual Consistency for billing. Redis credits are incremented by the
-  // Persistence Flusher ONLY after a successful DB commit to prevent drift.
-  // TOCTOU Mitigation: 'ownerStateCache' allows batch-level local reservations to catch bursts.
   const ownerStateCache = new Map<
     string,
     { used: number; limit: number; status: string }
@@ -30,7 +26,7 @@ export async function guardEvents(
 
   const guardResults = await Promise.all(
     enrichedEvents.map(async (wrapper) => {
-      const { clerkUserId, userId: ownerId } = wrapper;
+      const { clerkUserId, userId: ownerId, webhookUserId } = wrapper;
 
       // 1. Resolve Billing State (Redis-first with DB fallback)
       let state = ownerStateCache.get(ownerId);
@@ -66,8 +62,8 @@ export async function guardEvents(
 
           state = {
             used: userWithSub.creditLedger?.creditsUsed ?? 0,
-            limit: userWithSub.creditLedger?.creditLimit ?? 1000, // Default to FREE limit
-            status: userWithSub.subscription?.status ?? "ACTIVE", // Default to ACTIVE
+            limit: userWithSub.creditLedger?.creditLimit ?? 1000,
+            status: userWithSub.subscription?.status ?? "ACTIVE",
           };
 
           // Restore Redis
@@ -82,12 +78,9 @@ export async function guardEvents(
       }
 
       // 2. Enforce Status & Quota
-      // EXPIRED: Block everything
       if (state.status === "EXPIRED") return null;
 
-      // QUOTA: Block if used >= limit (limit -1 means unlimited)
       if (state.limit !== -1 && state.used >= state.limit) {
-        // Trigger notification (throttled by BullMQ jobId)
         await addNotificationJob({
           type: "QUOTA_FULL",
           userId: clerkUserId,
@@ -96,26 +89,24 @@ export async function guardEvents(
         return null;
       }
 
-      // 3. Batch-level TOCTOU mitigation: Perform local reservation
+      // Local reservation for batch processing
       state.used += 1;
 
-      const safeAutomations = [];
-      let userId = "";
-
+      let followerId = "";
       switch (wrapper.event.type) {
         case "COMMENT":
-          userId = wrapper.event.event.userId;
+          followerId = wrapper.event.event.userId;
           break;
         case "STORY_REPLY":
         case "DM_MESSAGE":
         case "QUICK_REPLY":
-          userId = wrapper.event.event.senderId;
+          followerId = wrapper.event.event.senderId;
           break;
         default:
           break;
       }
 
-      if (!userId) return null;
+      if (!followerId) return null;
 
       const automationGuards = await Promise.all(
         wrapper.matchedAutomations.map(async (automation) => {
@@ -130,31 +121,40 @@ export async function guardEvents(
             );
 
             if (isFollowConfirmClick || isOpeningMessageClick) {
-              const resolved = await isAskResolvedR(userId, automation.id);
+              const resolved = await isAskResolvedR(
+                webhookUserId,
+                followerId,
+                automation.id,
+              );
               if (resolved) return null;
 
-              const throttled = await isUserThrottledR(userId, automation.id);
+              const throttled = await isUserThrottledR(
+                webhookUserId,
+                followerId,
+                automation.id,
+              );
               if (throttled) return null;
             } else {
               const eventId = (wrapper.event.event as any).messageId || "";
-              const throttled = await isEventThrottledR(eventId);
+              const throttled = await isEventThrottledR(webhookUserId, eventId);
               if (throttled) return null;
             }
           } else {
-            const throttled = await isUserThrottledR(userId, automation.id);
+            const throttled = await isUserThrottledR(
+              webhookUserId,
+              followerId,
+              automation.id,
+            );
             if (throttled) return null;
           }
 
-          // Combined check for cooldown and pending states
           const [onCooldown, pending] = await Promise.all([
-            isUserOnCooldownR(userId, automation.id),
-            isPendingConfirmationR(userId, automation.id),
+            isUserOnCooldownR(webhookUserId, followerId, automation.id),
+            isPendingConfirmationR(webhookUserId, followerId, automation.id),
           ]);
 
           if (onCooldown) return null;
 
-          // SELF-HEALING: Block new triggers while a user has a pending interaction (e.g., Follow Gate).
-          // We let QUICK_REPLY through so the user can resolve the state.
           if (
             pending &&
             (wrapper.event.type === "COMMENT" ||

@@ -48,7 +48,7 @@ export interface ValidatedStoryReply {
   timestamp: string;
 }
 
-export interface ValidatedDmMessage {
+export interface ValidatedDm {
   messageId: string;
   text: string;
   senderId: string;
@@ -78,7 +78,7 @@ export type RefinedEvent =
     }
   | {
       type: "DM_MESSAGE";
-      event: ValidatedDmMessage;
+      event: ValidatedDm;
       webhookId: string;
       time: number;
       instagramUserId: string;
@@ -95,11 +95,11 @@ export type RefinedEvent =
 
 export interface FilteredEvent {
   event: RefinedEvent;
-  accountId: string;
-  clerkUserId: string;
-  userId: string;
+  accountId: string; // Mongo ID of InstaAccount
+  userId: string; // Mongo ID of User
+  clerkUserId: string; // Clerk ID (user_...)
+  webhookUserId: string; // Instagram Webhook ID (178...)
   instagramUsername: string;
-
   matchedAutomations: Automation[];
 }
 
@@ -113,8 +113,8 @@ export interface GuardedEvent extends EnrichedEvent {
 
 export interface ExecutionOutcome {
   automationId: string;
-  clerkUserId: string;
-  userId: string;
+  userId: string; // Mongo ID of User
+  clerkUserId: string; // Clerk ID (user_...)
   eventId: string;
 
   status:

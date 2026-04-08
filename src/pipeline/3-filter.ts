@@ -42,7 +42,7 @@ export async function filterEvents(
           case "COMMENT": {
             const mediaId = eventWrapper.event.mediaId;
             automations = await getAutomationsByPostR(
-              accountResult.id,
+              accountResult.webhookUserId,
               mediaId,
               async () => {
                 const res = await findActiveAutomationsByPost(
@@ -58,7 +58,7 @@ export async function filterEvents(
           case "STORY_REPLY": {
             const storyId = eventWrapper.event.storyId;
             automations = await getAutomationsByStoryR(
-              accountResult.id,
+              accountResult.webhookUserId,
               storyId,
               async () => {
                 const res = await findActiveAutomationsByStory(
@@ -72,7 +72,7 @@ export async function filterEvents(
           }
           case "DM_MESSAGE": {
             automations = await getAutomationsForAccountDMR(
-              accountResult.id,
+              accountResult.webhookUserId,
               async () => {
                 const res = await findActiveAutomationsForAccountDM(
                   accountResult.id,
@@ -86,6 +86,7 @@ export async function filterEvents(
           case "QUICK_REPLY": {
             const payload = eventWrapper.payload;
             const parts = payload.split(":");
+            // QR Format: ACTION:AUTOMATION_ID:ORIGIN_EVENT_ID
             const automationId = parts[1] || "";
             const originEventId = parts[2] || "";
 
@@ -93,6 +94,7 @@ export async function filterEvents(
 
             if (automationId) {
               const automation = await getAutomationByIdR(
+                accountResult.webhookUserId,
                 automationId,
                 async () => {
                   const res = await findAutomationById(automationId);
@@ -100,8 +102,7 @@ export async function filterEvents(
                 },
               );
 
-              // SECURITY: Ensure the requested automation corresponds to the current IG account.
-              // This prevents cross-account binding via crafted or stale payloads.
+              // SECURITY: Ensure the automation belongs to this account
               if (
                 automation &&
                 automation.instaAccountId === accountResult.id &&
@@ -112,13 +113,12 @@ export async function filterEvents(
                   accountId: accountResult.id,
                   clerkUserId: accountResult.user.clerkId,
                   userId: accountResult.userId,
+                  webhookUserId: accountResult.webhookUserId,
                   instagramUsername: accountResult.username,
                   matchedAutomations: [automation],
                 } as FilteredEvent;
               }
             }
-
-            // If no automation is found for a QUICK_REPLY, it's a "ghost" interaction (deleted automation) — drop the event.
             return null;
           }
 
@@ -172,13 +172,13 @@ export async function filterEvents(
             accountId: accountResult.id,
             clerkUserId: accountResult.user.clerkId,
             userId: accountResult.userId,
+            webhookUserId: accountResult.webhookUserId,
             instagramUsername: accountResult.username,
             matchedAutomations: matches,
           } as FilteredEvent;
         }
         return null;
       } catch (err) {
-        // Isolate failure to this specific event
         return null;
       }
     }),

@@ -12,7 +12,9 @@ export function processMessagingEntry(
     // 2. Noise Filter: Skips self-sent 'echo' DMs
     if (msg.message?.is_echo) continue;
 
-    // Process Story Reply
+    let processed = false;
+
+    // 1. Process Story Reply
     if (msg.message?.reply_to?.story) {
       if (msg.sender?.id && msg.message.text && msg.message.mid) {
         events.push({
@@ -28,6 +30,7 @@ export function processMessagingEntry(
             timestamp: String(msg.timestamp),
           },
         });
+        processed = true;
       }
     } else if (
       msg.message?.text &&
@@ -49,7 +52,7 @@ export function processMessagingEntry(
       });
     }
 
-    // Process Quick Reply / Postback
+    // 2. Process Quick Reply / Postback
     const qrPayload =
       msg.message?.quick_reply?.payload || msg.postback?.payload;
     if (
@@ -67,6 +70,23 @@ export function processMessagingEntry(
           messageId:
             msg.message?.mid || msg.postback?.mid || `pb_${msg.timestamp}`,
           text: msg.message?.text || msg.postback?.title || "Quick Reply",
+          senderId: msg.sender.id,
+          timestamp: String(msg.timestamp),
+        },
+      });
+      processed = true;
+    }
+
+    // 3. Fallback: Standard Direct Message (Text-based)
+    if (!processed && msg.message?.text && msg.message?.mid && msg.sender?.id) {
+      events.push({
+        type: "DIRECT_MESSAGE",
+        webhookId: entry.id,
+        time: entry.time,
+        instagramUserId,
+        event: {
+          messageId: msg.message.mid,
+          text: msg.message.text,
           senderId: msg.sender.id,
           timestamp: String(msg.timestamp),
         },

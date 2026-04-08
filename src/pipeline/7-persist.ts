@@ -8,6 +8,7 @@ import { logger } from "../logger";
 import { setEventHandledR } from "../redis/operations/event";
 import { incrementCreditUsedR } from "../redis/operations/credits";
 import { getCreditLimitForPlan } from "../config/plans.config";
+import { prisma } from "../db/db";
 
 /**
  * Persists execution outcomes by pushing them to a Redis buffer (Write-Behind).
@@ -38,7 +39,6 @@ export async function persistOutcomes(
     pipeline.rpush(KEYS.PENDING_OUTCOMES, ...serializedOutcomes);
     const results = await pipeline.exec();
 
-    // Verify all pipeline commands succeeded
     if (results) {
       for (const [err] of results) {
         if (err) {
@@ -50,9 +50,6 @@ export async function persistOutcomes(
     // Now that outcomes are safely buffered, mark events as permanently handled
     const uniqueEventIds = Array.from(new Set(outcomes.map((o) => o.eventId)));
     await Promise.all(uniqueEventIds.map((id) => setEventHandledR(id)));
-
-    // Redis credits are now incremented by the Persistence Flusher after DB commit
-    // to maintain strict consistency and prevent drifts on flusher crashes.
 
     return ok(undefined);
   } catch (error: any) {
@@ -155,13 +152,8 @@ async function persistOutcomesSync(
       );
 
       // POST-COMMIT: Update Redis cache if available
-      const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
-        outcome.status,
-      );
       if (isBillable) {
-        await incrementCreditUsedR(outcome.clerkUserId).catch(() => {
-          // Swallow Redis errors here as the DB is already durable
-        });
+        await incrementCreditUsedR(outcome.clerkUserId).catch(() => {});
       }
     } catch (error: any) {
       hasFailure = true;

@@ -17,74 +17,92 @@ export const TTL = {
   PENDING_CONFIRMATION: 5 * 60, // 5 minutes
   ASK_RESOLVED: 24 * 60 * 60, // 24 hours
   FOLLOW_WARNING: 60 * 60, // 1 hour
-  // Billing: no TTL — these persist for the lifetime of the subscription
 } as const;
 
 // Key generation functions — all IG-scoped keys use instaAccountId, not userId
 export const KEYS = {
-  // Domain: User (keyed by webhookUserId / instagramUserId)
-  USER_CONNECTION: (instagramUserId: string) =>
-    `ig:user_connection:${instagramUserId}`,
-  ACCOUNT_BY_IG: (instagramUserId: string) =>
-    `ig:account_by_ig:${instagramUserId}`,
+  // Domain: User (keyed by webhookUserId 178...)
+  USER_CONNECTION: (webhookUserId: string) =>
+    `ig:user_connection:${webhookUserId}`,
+  ACCOUNT_BY_IG: (webhookUserId: string) => `ig:account_by_ig:${webhookUserId}`,
 
-  // Domain: Tokens (keyed by instaAccountId)
-  ACCESS_TOKEN: (instaAccountId: string) => `ig:access_token:${instaAccountId}`,
-  TOKEN_REFRESH_LOCK: (instaAccountId: string) =>
-    `lock:refresh:token:${instaAccountId}`,
+  // Domain: Tokens (keyed by clerkId + webhookUserId)
+  ACCESS_TOKEN: (clerkId: string, webhookUserId: string) =>
+    `ig:access_token:${clerkId}:${webhookUserId}`,
+  TOKEN_REFRESH_LOCK: (webhookUserId: string) =>
+    `ig:lock:refresh:token:${webhookUserId}`,
 
-  // Domain: Comments / Idempotency (Worker)
-  COMMENT_PROCESSED: (commentId: string, automationId: string) =>
-    `ig:processed:${commentId}:${automationId}`,
-  GLOBAL_EVENT_PROCESSED: (eventId: string) => `ig:global_processed:${eventId}`,
-
-  // Domain: Throttling / Cooldowns (Worker) — keyed by commenter's IG id + automationId
-  USER_THROTTLE: (instagramUserId: string, automationId: string) =>
-    `ig:throttle:${instagramUserId}:${automationId}`,
-  EVENT_THROTTLE: (eventId: string) => `ig:throttle:event:${eventId}`,
-  USER_COOLDOWN: (instagramUserId: string, automationId: string) =>
-    `ig:cooldown:${instagramUserId}:${automationId}`,
-  PENDING_CONFIRMATION: (instagramUserId: string, automationId: string) =>
-    `ig:pending:${instagramUserId}:${automationId}`,
-  ASK_RESOLVED: (instagramUserId: string, automationId: string) =>
-    `ig:ask_resolved:${instagramUserId}:${automationId}`,
-  FOLLOW_WARNING: (
-    commenterId: string,
+  // Domain: Comments / Idempotency (Worker) — scoped by owner
+  COMMENT_PROCESSED: (
+    webhookUserId: string,
+    commentId: string,
     automationId: string,
-    originEventId: string,
-  ) => `ig:warn:follow:${commenterId}:${automationId}:${originEventId}`,
+  ) => `ig:processed:${webhookUserId}:${commentId}:${automationId}`,
+  GLOBAL_EVENT_PROCESSED: (webhookUserId: string, eventId: string) =>
+    `ig:global_processed:${webhookUserId}:${eventId}`,
+
+  // Domain: Throttling / Cooldowns (Worker) — scoped by owner + follower + automation
+  USER_THROTTLE: (
+    webhookUserId: string,
+    followerId: string,
+    automationId: string,
+  ) => `ig:throttle:${webhookUserId}:${followerId}:${automationId}`,
+  EVENT_THROTTLE: (webhookUserId: string, eventId: string) =>
+    `ig:throttle:event:${webhookUserId}:${eventId}`,
+  USER_COOLDOWN: (
+    webhookUserId: string,
+    followerId: string,
+    automationId: string,
+  ) => `ig:cooldown:${webhookUserId}:${followerId}:${automationId}`,
+  PENDING_CONFIRMATION: (
+    webhookUserId: string,
+    followerId: string,
+    automationId: string,
+  ) => `ig:pending:${webhookUserId}:${followerId}:${automationId}`,
+  ASK_RESOLVED: (
+    webhookUserId: string,
+    followerId: string,
+    automationId: string,
+  ) => `ig:ask_resolved:${webhookUserId}:${followerId}:${automationId}`,
+  FOLLOW_WARNING: (
+    webhookUserId: string,
+    followerId: string,
+    automationId: string,
+  ) => `ig:warn:follow:${webhookUserId}:${followerId}:${automationId}`,
 
   // Domain: Meta API Rate Limits
   APP_USAGE: () => `ig:rate_limit:app_usage`,
-  ACCOUNT_USAGE: (instagramUserId: string) =>
-    `ig:rate_limit:account:${instagramUserId}`,
+  ACCOUNT_USAGE: (webhookUserId: string) =>
+    `ig:rate_limit:account:${webhookUserId}`,
 
-  // Domain: Automations — ALL scoped to instaAccountId for strict isolation
-  AUTOMATION_BY_ID: (automationId: string) => `ig:automation:${automationId}`,
-  AUTOMATIONS_BY_POST: (instaAccountId: string, mediaId: string) =>
-    `ig:automation:post:${instaAccountId}:${mediaId}`,
-  AUTOMATIONS_BY_STORY: (instaAccountId: string, storyId: string) =>
-    `ig:automation:story:${instaAccountId}:${storyId}`,
-  AUTOMATIONS_FOR_ACCOUNT_DM: (instaAccountId: string) =>
-    `ig:automation:account_dm:${instaAccountId}`,
+  // Domain: Automations — ALL scoped to webhookUserId (178...)
+  AUTOMATION_BY_ID: (webhookUserId: string, automationId: string) =>
+    `ig:automation:${webhookUserId}:${automationId}`,
+  AUTOMATIONS_BY_POST: (webhookUserId: string, mediaId: string) =>
+    `ig:automation:post:${webhookUserId}:${mediaId}`,
+  AUTOMATIONS_BY_STORY: (webhookUserId: string, storyId: string) =>
+    `ig:automation:story:${webhookUserId}:${storyId}`,
+  AUTOMATIONS_FOR_ACCOUNT_DM: (webhookUserId: string) =>
+    `ig:automation:account_dm:${webhookUserId}`,
 
-  // Domain: Instagram Data (keyed by instagramUserId)
-  INSTAGRAM_POSTS: (instagramUserId: string) => `ig:posts:${instagramUserId}`,
-  INSTAGRAM_STORIES: (instagramUserId: string) =>
-    `ig:stories:${instagramUserId}`,
+  // Domain: Instagram Data (keyed by webhookUserId (178...))
+  INSTAGRAM_POSTS: (webhookUserId: string) => `ig:posts:${webhookUserId}`,
+  INSTAGRAM_STORIES: (webhookUserId: string) => `ig:stories:${webhookUserId}`,
 
   // Domain: Predicted API Metrics
-  PREDICTED_USAGE: (instagramUserId: string) =>
-    `ig:rate_limit:predicted:${instagramUserId}`,
+  PREDICTED_USAGE: (webhookUserId: string) =>
+    `ig:rate_limit:predicted:${webhookUserId}`,
 
   // Domain: Buffers (Async Persistence)
   PENDING_OUTCOMES: "pending:outcomes:buffer",
 
-  // Domain: Billing / Credits (keyed by main app userId)
-  // Worker reads/writes these; Main App sets them on plan changes.
-  CREDIT_USED: (userId: string) => `billing:credits:used:${userId}`,
-  CREDIT_LIMIT: (userId: string) => `billing:credits:limit:${userId}`,
-  SUB_STATUS: (userId: string) => `billing:sub:status:${userId}`,
+  // Domain: Billing / Credits (keyed by clerkId with user_ prefix)
+  CREDIT_USED: (clerkId: string) =>
+    `billing:credits:used:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
+  CREDIT_LIMIT: (clerkId: string) =>
+    `billing:credits:limit:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
+  SUB_STATUS: (clerkId: string) =>
+    `billing:sub:status:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
   // Domain: Notifications (BullMQ)
   NOTIFICATIONS_QUEUE: "notifications",
 } as const;

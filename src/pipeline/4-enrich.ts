@@ -11,16 +11,16 @@ export async function enrichEvents(
   const enrichResults = await Promise.all(
     filteredEvents.map(async (item) => {
       try {
-        const accessToken = await getAccessTokenR(item.accountId, () =>
-          getValidAccessToken(item.accountId),
+        const accessToken = await getAccessTokenR(
+          item.clerkUserId,
+          item.webhookUserId,
+          () => getValidAccessToken(item.accountId),
         );
         return {
           ...item,
           accessToken,
         };
       } catch (e: any) {
-        // We only silently skip if the token is truly missing/revoked.
-        // For infrastructure errors (Redis/DB/Network), we must log them loudly.
         if (
           e.name === "InstagramTokenExpiredError" ||
           e.message?.includes("Missing token")

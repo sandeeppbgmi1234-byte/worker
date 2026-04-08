@@ -2,14 +2,17 @@ import { getRedisClient } from "../client";
 import { KEYS, TTL } from "../keys";
 import type { Automation } from "@prisma/client";
 
-// All cache functions keyed by instaAccountId for strict account isolation
+/**
+ * Fetches automations matched by post (mediaId) from Redis.
+ * Scoped by webhookUserId for strict account isolation.
+ */
 export async function getAutomationsByPostR(
-  instaAccountId: string,
+  webhookUserId: string,
   mediaId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_BY_POST(instaAccountId, mediaId);
+  const key = KEYS.AUTOMATIONS_BY_POST(webhookUserId, mediaId);
 
   if (!redis) return dbFallback();
 
@@ -27,13 +30,16 @@ export async function getAutomationsByPostR(
   }
 }
 
+/**
+ * Fetches automations matched by story from Redis.
+ */
 export async function getAutomationsByStoryR(
-  instaAccountId: string,
+  webhookUserId: string,
   storyId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_BY_STORY(instaAccountId, storyId);
+  const key = KEYS.AUTOMATIONS_BY_STORY(webhookUserId, storyId);
 
   if (!redis) return dbFallback();
 
@@ -51,12 +57,16 @@ export async function getAutomationsByStoryR(
   }
 }
 
+/**
+ * Fetches specific automation by ID from Redis.
+ */
 export async function getAutomationByIdR(
+  webhookUserId: string,
   automationId: string,
   dbFallback: () => Promise<Automation | null>,
 ): Promise<Automation | null> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATION_BY_ID(automationId);
+  const key = KEYS.AUTOMATION_BY_ID(webhookUserId, automationId);
 
   if (!redis) return dbFallback();
 
@@ -76,12 +86,15 @@ export async function getAutomationByIdR(
   }
 }
 
+/**
+ * Fetches automations for RESPOND_TO_ALL_DMS flow.
+ */
 export async function getAutomationsForAccountDMR(
-  instaAccountId: string,
+  webhookUserId: string,
   dbFallback: () => Promise<Automation[]>,
 ): Promise<Automation[]> {
   const redis = getRedisClient();
-  const key = KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(instaAccountId);
+  const key = KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(webhookUserId);
 
   if (!redis) return dbFallback();
 

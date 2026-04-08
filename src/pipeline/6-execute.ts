@@ -52,8 +52,6 @@ export async function executeEvents(
       );
 
       // --- CRITICAL-2: ACQUIRE PER-USER-PER-ACCOUNT EXECUTION LOCK (30s) ---
-      // This prevents "Shadow Replica" jobs from sending duplicate DMs if the process stalls.
-      // Scoped by both account and user to ensure absolute siloed isolation.
       if (userId) {
         const lockKey = `lock:execute:account:${wrapper.accountId}:user:${userId}`;
         const redis = getRedisClient();
@@ -65,7 +63,6 @@ export async function executeEvents(
               { userId, accountId: wrapper.accountId, eventId },
               "Execution lock held by another thread. Flagging for retry.",
             );
-            // We throw here so allSettled catches it as a rejection for this specific event
             throw new ExecutionError(
               "executeEvents",
               `Execution lock held for user ${userId} on account ${wrapper.accountId}`,
@@ -81,7 +78,6 @@ export async function executeEvents(
               isOpeningMessageFlow,
             );
           } finally {
-            // RELEASE LOCK ATOMICALLY (Only if we still own it)
             try {
               await redis.eval(
                 "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
@@ -120,10 +116,7 @@ export async function executeEvents(
     }
   }
 
-  // ATOMIC RECONCILIATION: If we have outcomes (some successful DMs were sent),
-  // we MUST return them to persist stage first, even if others failed.
   if (flatOutcomes.length > 0) {
-    // If there were also errors, we log them but still return the successes
     if (errors.length > 0) {
       logger.warn(
         { errorCount: errors.length },
@@ -133,11 +126,7 @@ export async function executeEvents(
     return ok(flatOutcomes);
   }
 
-  // If everything failed, then throw the first error to trigger BullMQ retry
   if (errors.length > 0) {
-    return ok([]); // Still return empty array so persist stage doesn't crash?
-    // Actually, if everything failed, BullMQ should retry.
-    // Let's rethrow the first error.
     throw errors[0];
   }
 
@@ -154,7 +143,6 @@ async function runExecutionFlow(
   isFollowConfirmFlow: boolean,
   isOpeningMessageFlow: boolean,
 ): Promise<ExecutionOutcome[]> {
-  // Perform execution for each automation in parallel
   const automationResults = await Promise.allSettled(
     wrapper.safeAutomations.map(async (automation) => {
       // 0. SELF-HEALING: Clean slate for new threads
@@ -165,8 +153,12 @@ async function runExecutionFlow(
         userId
       ) {
         await Promise.all([
-          clearAskResolvedR(userId, automation.id),
-          clearPendingConfirmationR(userId, automation.id),
+          clearAskResolvedR(wrapper.webhookUserId, userId, automation.id),
+          clearPendingConfirmationR(
+            wrapper.webhookUserId,
+            userId,
+            automation.id,
+          ),
         ]).catch((err) => {
           logger.debug(
             { userId, automationId: automation.id, error: err.message },
@@ -185,7 +177,7 @@ async function runExecutionFlow(
         askToFollowEvent,
         automation,
         wrapper.accessToken,
-        wrapper.event.instagramUserId,
+        wrapper.webhookUserId,
         wrapper.instagramUsername,
       );
 
@@ -210,14 +202,19 @@ async function runExecutionFlow(
       }
 
       if (resolvedAskRes.value === "HALT") {
-        if (userId) await setPendingConfirmationR(userId, automation.id);
+        if (userId)
+          await setPendingConfirmationR(
+            wrapper.webhookUserId,
+            userId,
+            automation.id,
+          );
 
         if (wrapper.event.type === "COMMENT") {
           await executePublicReply(
             wrapper.event.event as any,
             automation,
             wrapper.accessToken,
-            wrapper.event.instagramUserId,
+            wrapper.webhookUserId,
           ).catch((err) => {
             logger.warn(
               { error: err.message, automationId: automation.id },
@@ -245,18 +242,22 @@ async function runExecutionFlow(
             wrapper.event.event as any,
             automation,
             wrapper.accessToken,
-            wrapper.event.instagramUserId,
+            wrapper.webhookUserId,
           );
 
           if (openRes.ok && userId)
-            await setPendingConfirmationR(userId, automation.id);
+            await setPendingConfirmationR(
+              wrapper.webhookUserId,
+              userId,
+              automation.id,
+            );
 
           if (wrapper.event.type === "COMMENT") {
             await executePublicReply(
               wrapper.event.event as any,
               automation,
               wrapper.accessToken,
-              wrapper.event.instagramUserId,
+              wrapper.webhookUserId,
             ).catch((err) => {
               logger.warn(
                 { error: err.message, automationId: automation.id },
@@ -285,7 +286,7 @@ async function runExecutionFlow(
               wrapper.event.event as any,
               automation,
               wrapper.accessToken,
-              wrapper.event.instagramUserId,
+              wrapper.webhookUserId,
             )
           : Promise.resolve(ok(null));
 
@@ -293,23 +294,30 @@ async function runExecutionFlow(
         wrapper.event.event as any,
         automation,
         wrapper.accessToken,
-        wrapper.event.instagramUserId,
+        wrapper.webhookUserId,
       );
 
       const [replyRes, dmRes] = await Promise.all([replyPromise, dmPromise]);
 
-      // PARTIAL SUCCESS RESILIENCE: Prioritize DM Delivery outcome for Cooldown & State tracking
       if (dmRes.ok) {
         const isDelivered =
           dmRes.value.sentMessage || dmRes.value.instagramMessageId;
 
         if (isDelivered) {
           if (userId) {
-            await setUserCooldownR(userId, automation.id);
+            await setUserCooldownR(
+              wrapper.webhookUserId,
+              userId,
+              automation.id,
+            );
             if (isFollowConfirmFlow || isOpeningMessageFlow) {
               await Promise.all([
-                setAskResolvedR(userId, automation.id),
-                clearPendingConfirmationR(userId, automation.id),
+                setAskResolvedR(wrapper.webhookUserId, userId, automation.id),
+                clearPendingConfirmationR(
+                  wrapper.webhookUserId,
+                  userId,
+                  automation.id,
+                ),
               ]).catch(() => {});
             }
           }
@@ -352,7 +360,6 @@ async function runExecutionFlow(
         } as ExecutionOutcome;
       }
 
-      // If DM Delivery failed, we report the error (regardless of replyRes)
       return {
         automationId: automation.id,
         clerkUserId: wrapper.clerkUserId,

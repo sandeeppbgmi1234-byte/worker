@@ -1,12 +1,10 @@
 import { QUICK_REPLIES } from "../config/instagram.config";
 import {
-  isFollowWarningSentR,
-  setFollowWarningSentR,
-} from "../redis/operations/cooldown";
-import {
   checkRateLimits,
   incrementApiUsage,
-} from "../redis/operations/rate-limit";
+  isFollowWarningSentR,
+  setFollowWarningSentR,
+} from "../redis";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
@@ -69,9 +67,9 @@ export async function executeAskToFollow(
     // Case 1: They clicked "I am Following" but are still not following
     if (isConfirmation) {
       const alreadyWarned = await isFollowWarningSentR(
+        instagramUserId,
         commenterId!,
         automation.id,
-        originEventId,
       );
       if (alreadyWarned) return ok("HALT");
 
@@ -84,7 +82,7 @@ export async function executeAskToFollow(
       const res = await fetchFromInstagram<any>(msgUrl.toString(), {
         method: "POST",
         body: {
-          recipient,
+          recipient: { id: commenterId! },
           message: { text: reminderText },
           messaging_type: "RESPONSE" as const,
           access_token: accessToken,
@@ -93,7 +91,11 @@ export async function executeAskToFollow(
       });
 
       if (res.ok) {
-        await setFollowWarningSentR(commenterId!, automation.id, originEventId);
+        await setFollowWarningSentR(
+          instagramUserId,
+          commenterId!,
+          automation.id,
+        );
       }
       return ok("HALT");
     }
@@ -112,7 +114,6 @@ export async function executeAskToFollow(
         profileUrl,
       },
       automation.id,
-      originEventId,
     );
 
     const result = await fetchFromInstagram<any>(msgUrl.toString(), {

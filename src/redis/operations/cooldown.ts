@@ -3,14 +3,15 @@ import { KEYS, TTL } from "../keys";
 import { logger } from "../../logger";
 
 export async function isUserThrottledR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
   timeoutSeconds = 10,
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return true;
 
-  const key = KEYS.USER_THROTTLE(instagramUserId, automationId);
+  const key = KEYS.USER_THROTTLE(webhookUserId, followerId, automationId);
 
   try {
     const result = await redis.set(key, "1", "EX", timeoutSeconds, "NX");
@@ -22,13 +23,14 @@ export async function isUserThrottledR(
 }
 
 export async function isEventThrottledR(
+  webhookUserId: string,
   eventId: string,
   timeoutSeconds = 10,
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return true;
 
-  const key = KEYS.EVENT_THROTTLE(eventId);
+  const key = KEYS.EVENT_THROTTLE(webhookUserId, eventId);
 
   try {
     const result = await redis.set(key, "1", "EX", timeoutSeconds, "NX");
@@ -40,18 +42,16 @@ export async function isEventThrottledR(
 }
 
 export async function isUserOnCooldownR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<boolean> {
-  // Configured check for production cooldowns
-  if (process.env.ENABLE_USER_COOLDOWN !== "true") {
-    return false;
-  }
+  if (process.env.ENABLE_USER_COOLDOWN !== "true") return false;
 
   const redis = getRedisClient();
   if (!redis) return false;
 
-  const key = KEYS.USER_COOLDOWN(instagramUserId, automationId);
+  const key = KEYS.USER_COOLDOWN(webhookUserId, followerId, automationId);
 
   try {
     const exists = await redis.exists(key);
@@ -63,14 +63,15 @@ export async function isUserOnCooldownR(
 }
 
 export async function setUserCooldownR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
   customTtlSeconds?: number,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.USER_COOLDOWN(instagramUserId, automationId);
+  const key = KEYS.USER_COOLDOWN(webhookUserId, followerId, automationId);
   const ttl = customTtlSeconds ?? TTL.DEFAULT_COOLDOWN;
 
   try {
@@ -81,13 +82,18 @@ export async function setUserCooldownR(
 }
 
 export async function isPendingConfirmationR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return false;
 
-  const key = KEYS.PENDING_CONFIRMATION(instagramUserId, automationId);
+  const key = KEYS.PENDING_CONFIRMATION(
+    webhookUserId,
+    followerId,
+    automationId,
+  );
 
   try {
     const exists = await redis.exists(key);
@@ -99,13 +105,18 @@ export async function isPendingConfirmationR(
 }
 
 export async function setPendingConfirmationR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.PENDING_CONFIRMATION(instagramUserId, automationId);
+  const key = KEYS.PENDING_CONFIRMATION(
+    webhookUserId,
+    followerId,
+    automationId,
+  );
   const ttl = TTL.PENDING_CONFIRMATION;
 
   try {
@@ -119,13 +130,18 @@ export async function setPendingConfirmationR(
 }
 
 export async function clearPendingConfirmationR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.PENDING_CONFIRMATION(instagramUserId, automationId);
+  const key = KEYS.PENDING_CONFIRMATION(
+    webhookUserId,
+    followerId,
+    automationId,
+  );
 
   try {
     await redis.del(key);
@@ -138,13 +154,14 @@ export async function clearPendingConfirmationR(
 }
 
 export async function isAskResolvedR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return false;
 
-  const key = KEYS.ASK_RESOLVED(instagramUserId, automationId);
+  const key = KEYS.ASK_RESOLVED(webhookUserId, followerId, automationId);
 
   try {
     const exists = await redis.exists(key);
@@ -156,29 +173,31 @@ export async function isAskResolvedR(
 }
 
 export async function setAskResolvedR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.ASK_RESOLVED(instagramUserId, automationId);
+  const key = KEYS.ASK_RESOLVED(webhookUserId, followerId, automationId);
 
   try {
-    await redis.set(key, "1", "EX", TTL.ASK_RESOLVED);
+    const exists = await redis.set(key, "1", "EX", TTL.ASK_RESOLVED);
   } catch (error: any) {
     logger.warn({ error, key }, `setAskResolvedR failed for key=${key}`);
   }
 }
 
 export async function clearAskResolvedR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.ASK_RESOLVED(instagramUserId, automationId);
+  const key = KEYS.ASK_RESOLVED(webhookUserId, followerId, automationId);
 
   try {
     await redis.del(key);
@@ -188,11 +207,12 @@ export async function clearAskResolvedR(
 }
 
 export async function clearUserCooldownR(
-  instagramUserId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
 ): Promise<void> {
   const redis = getRedisClient();
-  const key = KEYS.USER_COOLDOWN(instagramUserId, automationId);
+  const key = KEYS.USER_COOLDOWN(webhookUserId, followerId, automationId);
 
   if (!redis) return;
 
@@ -202,14 +222,17 @@ export async function clearUserCooldownR(
     logger.warn({ error, key }, `clearUserCooldownR failed for key=${key}`);
   }
 }
+
 export async function isFollowWarningSentR(
-  commenterId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
-  originEventId: string,
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return false;
-  const key = KEYS.FOLLOW_WARNING(commenterId, automationId, originEventId);
+
+  const key = KEYS.FOLLOW_WARNING(webhookUserId, followerId, automationId);
+
   try {
     const exists = await redis.exists(key);
     return exists > 0;
@@ -220,13 +243,15 @@ export async function isFollowWarningSentR(
 }
 
 export async function setFollowWarningSentR(
-  commenterId: string,
+  webhookUserId: string,
+  followerId: string,
   automationId: string,
-  originEventId: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
-  const key = KEYS.FOLLOW_WARNING(commenterId, automationId, originEventId);
+
+  const key = KEYS.FOLLOW_WARNING(webhookUserId, followerId, automationId);
+
   try {
     await redis.set(key, "1", "EX", TTL.FOLLOW_WARNING);
   } catch (error: any) {

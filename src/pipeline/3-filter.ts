@@ -15,7 +15,7 @@ import {
 import { RefinedEvent, FilteredEvent } from "../types";
 import { Automation } from "@prisma/client";
 import { Result, ok } from "../helpers/result";
-import { FilterError } from "../errors/pipeline.errors";
+import { FilterError, PipelineRetryableError } from "../errors/pipeline.errors";
 import { logger } from "../logger";
 
 export async function filterEvents(
@@ -130,9 +130,11 @@ export async function filterEvents(
         if (automations.length === 0) return null;
 
         const textTarget =
-          eventWrapper.type === "COMMENT"
+          (eventWrapper.type === "COMMENT"
             ? eventWrapper.event.text
-            : (eventWrapper.event as any).text;
+            : (eventWrapper.event as any).text) || "";
+
+        if (typeof textTarget !== "string") return null;
 
         const matches: Automation[] = [];
         const specificAutomations = automations.filter(
@@ -187,7 +189,20 @@ export async function filterEvents(
         }
         return null;
       } catch (err: any) {
-        return null;
+        logger.error(
+          {
+            err,
+            eventType: eventWrapper.type,
+            instagramUserId: eventWrapper.instagramUserId,
+          },
+          "Error filtering individual event",
+        );
+        throw new PipelineRetryableError(
+          "filterEvents",
+          "Transient failure during event filtering",
+          { eventType: eventWrapper.type },
+          err,
+        );
       }
     }),
   );

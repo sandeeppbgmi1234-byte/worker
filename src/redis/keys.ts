@@ -95,14 +95,14 @@ export const KEYS = {
   PENDING_OUTCOMES: "pending:outcomes:buffer",
 
   // Domain: Billing / Credits (keyed by clerkId with user_ prefix)
-  CREDIT_USED: (clerkId: string) =>
-    `billing:credits:used:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
-  CREDIT_LIMIT: (clerkId: string) =>
-    `billing:credits:limit:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
-  SUB_STATUS: (clerkId: string) =>
-    `billing:sub:status:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
-  PLAN: (clerkId: string) =>
-    `billing:plan:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
+  CREDIT_USED: (clerkId: string) => `billing:credits:used:${normalizeClerkId(clerkId)}`,
+  CREDIT_LIMIT: (clerkId: string) => `billing:credits:limit:${normalizeClerkId(clerkId)}`,
+  SUB_STATUS: (clerkId: string) => `billing:sub:status:${normalizeClerkId(clerkId)}`,
+  PLAN: (clerkId: string) => `billing:plan:${normalizeClerkId(clerkId)}`,
   // Domain: Notifications (BullMQ)
   NOTIFICATIONS_QUEUE: "notifications",
 } as const;
+
+function normalizeClerkId(clerkId: string): string {
+  return clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`;
+}

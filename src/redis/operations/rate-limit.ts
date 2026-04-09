@@ -33,12 +33,12 @@ export async function updateRateLimitsFromHeadersR(
       }
     }
 
+    let maxAccountUsage = 0;
+
     // 2. Business Usage (Account-Level)
     if (businessUsage) {
-      let maxAccountUsage = 0;
       for (const key of Object.keys(businessUsage)) {
         const metrics = businessUsage[key];
-        // Handle both Array format and single object format
         const m = Array.isArray(metrics) ? metrics[0] : metrics;
         if (m) {
           const usage = Math.max(
@@ -51,21 +51,18 @@ export async function updateRateLimitsFromHeadersR(
           if (usage > maxAccountUsage) maxAccountUsage = usage;
         }
       }
-      if (maxAccountUsage > 0)
-        pipeline.set(
-          KEYS.ACCOUNT_USAGE(webhookUserId),
-          maxAccountUsage.toString(),
-          "EX",
-          TTL.API_USAGE,
-        );
     }
 
     // 3. Ad Account Usage (Fallback)
     if (adAccountUsage && adAccountUsage.acc_id_util_pct) {
       const usage = Math.round(adAccountUsage.acc_id_util_pct);
+      if (usage > maxAccountUsage) maxAccountUsage = usage;
+    }
+
+    if (maxAccountUsage > 0) {
       pipeline.set(
         KEYS.ACCOUNT_USAGE(webhookUserId),
-        usage.toString(),
+        maxAccountUsage.toString(),
         "EX",
         TTL.API_USAGE,
       );
@@ -117,6 +114,11 @@ export async function checkRateLimits(webhookUserId: string): Promise<void> {
 export async function getGlobalAppUsageR(): Promise<number> {
   const redis = getRedisClient();
   if (!redis) return 0;
-  const usage = await redis.get(KEYS.APP_USAGE());
-  return usage ? parseInt(usage, 10) : 0;
+  try {
+    const usage = await redis.get(KEYS.APP_USAGE());
+    return usage ? parseInt(usage, 10) : 0;
+  } catch (error: any) {
+    logger.warn({ error: error.message }, "getGlobalAppUsageR failed");
+    return 0;
+  }
 }

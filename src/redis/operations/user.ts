@@ -77,6 +77,7 @@ export async function setUserConnectedR(webhookUserId: string): Promise<void> {
 export async function invalidateUserCacheR(
   clerkId: string,
   webhookUserId: string,
+  instagramUserId?: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
@@ -86,7 +87,11 @@ export async function invalidateUserCacheR(
 
     // 1. Delete direct lookup keys
     pipeline.del(KEYS.USER_CONNECTION(webhookUserId));
-    pipeline.del(KEYS.ACCOUNT_BY_IG(webhookUserId));
+    if (instagramUserId) {
+      pipeline.del(KEYS.ACCOUNT_BY_IG(instagramUserId));
+    } else {
+      pipeline.del(KEYS.ACCOUNT_BY_IG(webhookUserId));
+    }
     pipeline.del(KEYS.ACCESS_TOKEN(clerkId, webhookUserId));
     pipeline.del(KEYS.TOKEN_REFRESH_LOCK(webhookUserId));
     pipeline.del(KEYS.ACCOUNT_USAGE(webhookUserId));
@@ -113,12 +118,12 @@ export async function invalidateUserCacheR(
     await pipeline.exec();
 
     logger.info(
-      { clerkId, webhookUserId },
+      { clerkId, webhookUserId, instagramUserId },
       "Purged all Redis cache keys for account due to deactivation/refresh.",
     );
   } catch (error: any) {
     logger.error(
-      { clerkId, webhookUserId, error: error.message },
+      { clerkId, webhookUserId, instagramUserId, error: error.message },
       "Failed to purge user cache keys.",
     );
   }

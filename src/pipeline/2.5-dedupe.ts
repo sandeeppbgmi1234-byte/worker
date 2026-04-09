@@ -1,6 +1,6 @@
 import { RefinedEvent } from "../types";
 import { acquireEventLockR, isEventHandledR } from "../redis/operations/event";
-import { Result, ok } from "../helpers/result";
+import { Result, ok, fail } from "../helpers/result";
 import { GuardError } from "../errors/pipeline.errors";
 
 /**
@@ -43,9 +43,11 @@ export async function dedupeEvents(
       );
       if (lockRes === "LOCKED") continue;
       if (lockRes === "ERROR") {
-        throw new GuardError(
-          "dedupeEvents",
-          `Redis error acquiring lock: ${eventId}`,
+        return fail(
+          new GuardError(
+            "dedupeEvents",
+            `Redis error acquiring lock: ${eventId}`,
+          ),
         );
       }
     }

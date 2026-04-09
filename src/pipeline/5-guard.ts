@@ -53,50 +53,59 @@ export async function guardEvents(
     );
   }
 
-  // Cache for multi-event batches sharing the same owner.
-  const ownerStateCache = new Map<
-    string,
-    { used: number; limit: number; status: string; plan: string }
-  >();
+  const eventsByOwner = enrichedEvents.reduce(
+    (acc, current) => {
+      const ownerId = current.userId;
+      if (!acc[ownerId]) acc[ownerId] = [];
+      acc[ownerId].push(current);
+      return acc;
+    },
+    {} as Record<string, EnrichedEvent[]>,
+  );
 
-  const guardResults = await Promise.all(
-    enrichedEvents.map(async (wrapper) => {
-      const { clerkUserId, userId: ownerId, webhookUserId } = wrapper;
+  type GuardResult =
+    | { success: true; data: GuardedEvent }
+    | { success: false; errorType: string; error: any; wrapper: EnrichedEvent };
+
+  const ownerBatches = await Promise.all(
+    Object.entries(eventsByOwner).map(async ([ownerId, events]) => {
+      const batchResults: GuardResult[] = [];
 
       // 1. Resolve Billing State (Redis-first with DB fallback)
-      let state = ownerStateCache.get(ownerId);
-      if (!state) {
-        const cached = await getCreditStateR(clerkUserId);
-        if (
-          cached.creditsUsed !== null &&
-          cached.creditLimit !== null &&
-          cached.subStatus !== null &&
-          cached.plan !== null
-        ) {
-          state = {
-            used: cached.creditsUsed,
-            limit: cached.creditLimit,
-            status: cached.subStatus,
-            plan: cached.plan,
-          };
-        } else {
-          // Self-healing: Read from DB
-          const userWithSub = await prisma.user.findUnique({
-            where: { id: ownerId },
-            include: {
-              subscription: true,
-              creditLedger: true,
-            },
-          });
+      const first = events[0];
+      const { clerkUserId } = first;
 
-          if (!userWithSub) {
-            logger.warn(
-              { ownerId, clerkUserId, event: wrapper.event.type },
-              "Billing check failed: User record not found for ownerId — skipping event",
-            );
-            return null;
-          }
+      let state: {
+        used: number;
+        limit: number;
+        status: string;
+        plan: string;
+      } | null = null;
 
+      const cached = await getCreditStateR(clerkUserId);
+      if (
+        cached.creditsUsed !== null &&
+        cached.creditLimit !== null &&
+        cached.subStatus !== null &&
+        cached.plan !== null
+      ) {
+        state = {
+          used: cached.creditsUsed,
+          limit: cached.creditLimit,
+          status: cached.subStatus,
+          plan: cached.plan,
+        };
+      } else {
+        // Self-healing: Read from DB
+        const userWithSub = await prisma.user.findUnique({
+          where: { id: ownerId },
+          include: {
+            subscription: true,
+            creditLedger: true,
+          },
+        });
+
+        if (userWithSub) {
           state = {
             used: userWithSub.creditLedger?.creditsUsed ?? 0,
             limit: userWithSub.creditLedger?.creditLimit ?? 1000,
@@ -113,156 +122,249 @@ export async function guardEvents(
             state.plan,
           );
         }
-        ownerStateCache.set(ownerId, state);
       }
 
-      // 2. Priority & Safe Mode Throttling
-      if (
-        appUsage >= RATE_LIMIT_THRESHOLDS.SAFE_MODE_THRESHOLD &&
-        state.plan !== "BLACK"
-      ) {
-        logger.info(
-          {
-            appUsage,
-            threshold: RATE_LIMIT_THRESHOLDS.SAFE_MODE_THRESHOLD,
-            ownerId,
-            plan: state.plan,
-          },
-          "SAFE MODE: Throttling non-BLACK tier user.",
+      if (!state) {
+        logger.warn(
+          { ownerId, clerkUserId },
+          "Billing check failed: State could not be resolved — skipping batch",
         );
-        throw new InstagramRateLimitError(
-          "guardEvents",
-          `App-Level Safe Mode reached (${appUsage}%). Delaying non-BLACK tier users.`,
-          true,
-          60_000, // 1 minute
+        return events.map(
+          (wrapper) =>
+            ({
+              success: false,
+              errorType: "billing_missing",
+              error: new Error("Billing state not found"),
+              wrapper,
+            }) as GuardResult,
         );
       }
 
-      // 3. Enforce Quota (The Shield)
-      if (state.status === "EXPIRED" || state.status === "SOFT_PAUSED")
-        return null;
+      // Process each owner's events sequentially to maintain quota integrity
+      for (const wrapper of events) {
+        try {
+          const { webhookUserId } = wrapper;
 
-      if (state.limit !== -1 && state.used >= state.limit) {
-        // Drop jobs for exhausted credits (and trigger notification once)
-        if (state.status === "ACTIVE") {
-          await addNotificationJob({
-            type: "QUOTA_FULL",
-            userId: clerkUserId,
-            usedAt: Date.now(),
-          });
-          // Optimistically update status to prevent multiple notifications
-          state.status = "SOFT_PAUSED";
-          ownerStateCache.set(ownerId, state);
-          // Note: In a real app, you'd update DB/Redis status here too
-        }
-        return null;
-      }
-
-      // Local reservation for batch processing
-      state.used += 1;
-
-      let followerId = "";
-      switch (wrapper.event.type) {
-        case "COMMENT":
-          followerId = wrapper.event.event.userId;
-          break;
-        case "STORY_REPLY":
-        case "DM_MESSAGE":
-        case "QUICK_REPLY":
-          followerId = wrapper.event.event.senderId;
-          break;
-        default:
-          break;
-      }
-
-      if (!followerId) return null;
-
-      // 4. Account-Level Spam Guard (Cooldown across all webhooks for this account)
-      const isAccountGuarded = await isAccountSpamGuardedR(webhookUserId);
-      if (isAccountGuarded) {
-        throw new InstagramRateLimitError(
-          "guardEvents",
-          `Account-Level Spam Guard active for ${webhookUserId}. Delaying 2s.`,
-          true,
-          2_000, // 2 seconds
-        );
-      }
-
-      const automationGuards = await Promise.all(
-        wrapper.matchedAutomations.map(async (automation) => {
-          // --- ATOMICITY & SPAM PROTECTION ---
-          if (wrapper.event.type === "QUICK_REPLY") {
-            const payload = wrapper.event.payload;
-            const isFollowConfirmClick = payload.startsWith(
-              QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX,
+          // 2. Priority & Safe Mode Throttling
+          if (
+            appUsage >= RATE_LIMIT_THRESHOLDS.SAFE_MODE_THRESHOLD &&
+            state.plan !== "BLACK"
+          ) {
+            throw new InstagramRateLimitError(
+              "guardEvents",
+              `App-Level Safe Mode reached (${appUsage}%).`,
+              true,
+              60_000,
             );
-            const isOpeningMessageClick = payload.startsWith(
-              QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
-            );
-
-            if (isFollowConfirmClick || isOpeningMessageClick) {
-              const resolved = await isAskResolvedR(
-                webhookUserId,
-                followerId,
-                automation.id,
-              );
-              if (resolved) return null;
-
-              const throttled = await isUserThrottledR(
-                webhookUserId,
-                followerId,
-                automation.id,
-              );
-              if (throttled) return null;
-            } else {
-              const eventId = (wrapper.event.event as any).messageId || "";
-              const throttled = await isEventThrottledR(webhookUserId, eventId);
-              if (throttled) return null;
-            }
-          } else {
-            const throttled = await isUserThrottledR(
-              webhookUserId,
-              followerId,
-              automation.id,
-            );
-            if (throttled) return null;
           }
 
-          const [onCooldown, pending] = await Promise.all([
-            isUserOnCooldownR(webhookUserId, followerId, automation.id),
-            isPendingConfirmationR(webhookUserId, followerId, automation.id),
-          ]);
+          // 3. Enforce Quota (The Shield)
+          if (state.status === "EXPIRED" || state.status === "SOFT_PAUSED") {
+            batchResults.push({
+              success: false,
+              errorType: "soft_paused",
+              error: new Error(`Owner is ${state.status}`),
+              wrapper,
+            });
+            continue;
+          }
 
-          if (onCooldown) return null;
+          if (state.limit !== -1 && state.used >= state.limit) {
+            if (state.status === "ACTIVE") {
+              await addNotificationJob({
+                type: "QUOTA_FULL",
+                userId: clerkUserId,
+                usedAt: Date.now(),
+              });
+              // Persist the pause
+              await prisma.subscription
+                .update({
+                  where: { userId: ownerId },
+                  data: { status: "SOFT_PAUSED" },
+                })
+                .catch((err) =>
+                  logger.error({ err, ownerId }, "Failed to persist status"),
+                );
+
+              await setCreditStateR(
+                clerkUserId,
+                state.used,
+                state.limit,
+                "SOFT_PAUSED",
+                state.plan,
+              );
+              state.status = "SOFT_PAUSED";
+            }
+            batchResults.push({
+              success: false,
+              errorType: "quota_exceeded",
+              error: new Error("Quota exceeded"),
+              wrapper,
+            });
+            continue;
+          }
+
+          // Local reservation
+          state.used += 1;
+
+          let followerId = "";
+          switch (wrapper.event.type) {
+            case "COMMENT":
+              followerId = wrapper.event.event.userId;
+              break;
+            case "STORY_REPLY":
+            case "DM_MESSAGE":
+            case "QUICK_REPLY":
+              followerId = wrapper.event.event.senderId;
+              break;
+          }
+
+          if (!followerId) {
+            batchResults.push({
+              success: false,
+              errorType: "missing_follower_id",
+              error: new Error("Follower ID missing"),
+              wrapper,
+            });
+            continue;
+          }
+
+          // 4. Account-Level Spam Guard
+          const isAccountGuarded = await isAccountSpamGuardedR(webhookUserId);
+          if (isAccountGuarded) {
+            throw new InstagramRateLimitError(
+              "guardEvents",
+              `Account-Level Spam Guard active for ${webhookUserId}.`,
+              true,
+              2_000,
+            );
+          }
+
+          const automationGuards = await Promise.all(
+            wrapper.matchedAutomations.map(async (automation) => {
+              try {
+                if (wrapper.event.type === "QUICK_REPLY") {
+                  const payload = wrapper.event.payload;
+                  const isFollowConfirmClick = payload.startsWith(
+                    QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX,
+                  );
+                  const isOpeningMessageClick = payload.startsWith(
+                    QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
+                  );
+
+                  if (isFollowConfirmClick || isOpeningMessageClick) {
+                    const [resolved, throttled] = await Promise.all([
+                      isAskResolvedR(webhookUserId, followerId, automation.id),
+                      isUserThrottledR(
+                        webhookUserId,
+                        followerId,
+                        automation.id,
+                      ),
+                    ]);
+                    if (resolved || throttled) return null;
+                  } else {
+                    const eventId =
+                      (wrapper.event.event as any).messageId || "";
+                    const throttled = await isEventThrottledR(
+                      webhookUserId,
+                      eventId,
+                    );
+                    if (throttled) return null;
+                  }
+                } else {
+                  const throttled = await isUserThrottledR(
+                    webhookUserId,
+                    followerId,
+                    automation.id,
+                  );
+                  if (throttled) return null;
+                }
+
+                const [onCooldown, pending] = await Promise.all([
+                  isUserOnCooldownR(webhookUserId, followerId, automation.id),
+                  isPendingConfirmationR(
+                    webhookUserId,
+                    followerId,
+                    automation.id,
+                  ),
+                ]);
+
+                if (onCooldown) return null;
+                if (
+                  pending &&
+                  (wrapper.event.type === "COMMENT" ||
+                    wrapper.event.type === "STORY_REPLY")
+                ) {
+                  return null;
+                }
+
+                return automation;
+              } catch (err) {
+                logger.warn(
+                  { err, automationId: automation.id },
+                  "Automation guard check failed",
+                );
+                return null;
+              }
+            }),
+          );
+
+          const validAutomations = automationGuards.filter(
+            (a): a is Automation => a !== null,
+          );
 
           if (
-            pending &&
-            (wrapper.event.type === "COMMENT" ||
-              wrapper.event.type === "STORY_REPLY")
+            validAutomations.length > 0 ||
+            wrapper.event.type === "QUICK_REPLY"
           ) {
-            return null;
+            batchResults.push({
+              success: true,
+              data: {
+                ...wrapper,
+                safeAutomations: validAutomations,
+              } as GuardedEvent,
+            });
+          } else {
+            batchResults.push({
+              success: false,
+              errorType: "no_valid_automations",
+              error: new Error("All matched automations filtered by guard"),
+              wrapper,
+            });
           }
-
-          return automation;
-        }),
-      );
-
-      const validAutomations = automationGuards.filter(
-        (a): a is Automation => a !== null,
-      );
-
-      if (validAutomations.length > 0 || wrapper.event.type === "QUICK_REPLY") {
-        return {
-          ...wrapper,
-          safeAutomations: validAutomations,
-        } as GuardedEvent;
+        } catch (err: any) {
+          batchResults.push({
+            success: false,
+            errorType:
+              err instanceof InstagramRateLimitError
+                ? "throttle"
+                : "unknown_error",
+            error: err,
+            wrapper,
+          });
+        }
       }
-      return null;
+      return batchResults;
     }),
   );
 
-  const guardedEvents = guardResults.filter(
-    (item): item is GuardedEvent => item !== null,
+  const flatResults = ownerBatches.flat();
+  const guardedEvents = flatResults
+    .filter((res) => res.success)
+    .map((res) => (res as any).data as GuardedEvent);
+
+  const throttleErrors = flatResults.filter(
+    (res) => !res.success && res.errorType === "throttle",
   );
+  if (throttleErrors.length > 0) {
+    // If ANY event in the batch was throttled, we can choose to surface it as a Result.fail
+    // so the whole job retries, OR we can just proceed with what we have.
+    // The instructions suggest treating them specially.
+    logger.warn(
+      { count: throttleErrors.length },
+      "Some events were throttled during guard stage. Continuing with non-throttled events.",
+    );
+  }
+
   return ok(guardedEvents);
 }

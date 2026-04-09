@@ -48,8 +48,11 @@ export async function persistOutcomes(
     }
 
     // Now that outcomes are safely buffered, mark events as permanently handled
+    // Use composite key to prevent cross-tenant deduplication issues
     const uniqueEvents = Array.from(
-      new Map(outcomes.map((o) => [o.eventId, o])).values(),
+      new Map(
+        outcomes.map((o) => [`${o.webhookUserId}:${o.eventId}`, o]),
+      ).values(),
     );
     await Promise.all(
       uniqueEvents.map((o) => setEventHandledR(o.webhookUserId, o.eventId)),
@@ -143,11 +146,6 @@ async function persistOutcomesSync(
               },
             });
           }
-
-          // Mark as handled after successful DB write
-          if (outcome.eventId) {
-            await setEventHandledR(outcome.webhookUserId, outcome.eventId);
-          }
         },
         {
           operation: "persistPipelineOutcomeSync",
@@ -155,7 +153,12 @@ async function persistOutcomesSync(
         },
       );
 
-      // POST-COMMIT: Update Redis cache if available
+      // POST-COMMIT: Update Redis state if available
+      if (outcome.eventId) {
+        await setEventHandledR(outcome.webhookUserId, outcome.eventId).catch(
+          () => {},
+        );
+      }
       if (isBillable) {
         await incrementCreditUsedR(outcome.clerkUserId).catch(() => {});
       }

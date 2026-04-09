@@ -51,6 +51,7 @@ export function processMessagingEntry(
           timestamp: String(msg.timestamp),
         },
       });
+      processed = true;
     }
 
     // 2. Process Quick Reply / Postback

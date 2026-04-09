@@ -74,7 +74,7 @@ export async function executeAskToFollow(
       await checkRateLimits(instagramUserId);
 
       const reminderText =
-        "Please follow to access the link 🔔. This reminder will appear only 1 time ⏳. Once you have followed, click ‘I am Following’ above to continue ✅";
+        "Please follow to access the link 🔔. This reminder expires after one hour ⏳. Once you have followed, click ‘I am Following’ above to continue ✅";
 
       const res = await fetchFromInstagram<any>(msgUrl.toString(), {
         method: "POST",
@@ -87,13 +87,9 @@ export async function executeAskToFollow(
         instagramUserId,
       });
 
-      if (res.ok) {
-        await setFollowWarningSentR(
-          instagramUserId,
-          commenterId!,
-          automation.id,
-        );
-      }
+      if (!res.ok) return fail(res.error);
+
+      await setFollowWarningSentR(instagramUserId, commenterId!, automation.id);
       return ok("HALT");
     }
 
@@ -110,7 +106,7 @@ export async function executeAskToFollow(
         profileUrl,
       },
       automation.id,
-      event.id || "untracked",
+      originEventId,
     );
 
     const result = await fetchFromInstagram<any>(msgUrl.toString(), {

@@ -183,7 +183,7 @@ export async function setAskResolvedR(
   const key = KEYS.ASK_RESOLVED(webhookUserId, followerId, automationId);
 
   try {
-    const exists = await redis.set(key, "1", "EX", TTL.ASK_RESOLVED);
+    await redis.set(key, "1", "EX", TTL.ASK_RESOLVED);
   } catch (error: any) {
     logger.warn({ error, key }, `setAskResolvedR failed for key=${key}`);
   }
@@ -268,6 +268,7 @@ export async function isAccountSpamGuardedR(
     const exists = await redis.exists(key);
     return exists > 0;
   } catch (error: any) {
+    logger.warn({ error, key }, `isAccountSpamGuardedR failed for key=${key}`);
     return false;
   }
 }
@@ -282,6 +283,6 @@ export async function setAccountSpamGuardR(
   try {
     await redis.set(key, "1", "EX", ttlSeconds);
   } catch (error: any) {
-    // Ignore
+    logger.warn({ error, key }, `setAccountSpamGuardR failed for key=${key}`);
   }
 }

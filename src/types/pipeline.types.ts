@@ -125,6 +125,7 @@ export interface ExecutionOutcome {
     | "OPENING_MESSAGE_SENT"
     | "SKIPPED";
   errorMessage?: string;
+  retryable?: boolean;
   sentMessage?: string;
   instagramMessageId?: string | null;
   actionType: string;

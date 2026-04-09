@@ -81,6 +81,7 @@ export async function refreshAccessToken(
         await invalidateUserCacheR(
           account.user?.clerkId || "",
           account.webhookUserId || "",
+          account.instagramUserId,
         );
       } catch (cacheError: any) {
         logger.error(

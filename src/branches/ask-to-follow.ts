@@ -1,7 +1,6 @@
 import { QUICK_REPLIES } from "../config/instagram.config";
 import {
   checkRateLimits,
-  incrementApiUsage,
   isFollowWarningSentR,
   setFollowWarningSentR,
 } from "../redis";
@@ -29,7 +28,6 @@ export async function executeAskToFollow(
   if (!automation.askToFollowEnabled) return ok("PROCEED");
 
   await checkRateLimits(instagramUserId);
-  await incrementApiUsage(instagramUserId, 1);
 
   // If this is a follow confirmation click, give Meta a moment to update status
   const isConfirmation = event.text === QUICK_REPLIES.FOLLOW_CONFIRM.TITLE;
@@ -74,7 +72,6 @@ export async function executeAskToFollow(
       if (alreadyWarned) return ok("HALT");
 
       await checkRateLimits(instagramUserId);
-      await incrementApiUsage(instagramUserId, 1);
 
       const reminderText =
         "Please follow to access the link 🔔. This reminder will appear only 1 time ⏳. Once you have followed, click ‘I am Following’ above to continue ✅";
@@ -106,7 +103,6 @@ export async function executeAskToFollow(
       `https://www.instagram.com/${instagramUsername}`;
 
     await checkRateLimits(instagramUserId);
-    await incrementApiUsage(instagramUserId, 1);
 
     const templateAttachment = buildAskToFollowTemplate(
       {

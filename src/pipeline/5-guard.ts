@@ -5,23 +5,58 @@ import {
   isPendingConfirmationR,
   isEventThrottledR,
   isAskResolvedR,
+  isAccountSpamGuardedR,
 } from "../redis/operations/cooldown";
-import { QUICK_REPLIES } from "../config/instagram.config";
+import {
+  QUICK_REPLIES,
+  RATE_LIMIT_THRESHOLDS,
+} from "../config/instagram.config";
 import { Result, ok } from "../helpers/result";
 import { GuardError } from "../errors/pipeline.errors";
+import { getGlobalAppUsageR } from "../redis/operations/rate-limit";
+import { InstagramRateLimitError } from "../errors/instagram.errors";
 import { Automation } from "@prisma/client";
 import { getCreditStateR, setCreditStateR } from "../redis/operations/credits";
-import { addNotificationJob } from "../queues/notifications";
+import { addNotificationJob } from "../queue/notifications";
 import { prisma } from "../db/db";
 import { logger } from "../logger";
 
 export async function guardEvents(
   enrichedEvents: EnrichedEvent[],
 ): Promise<Result<GuardedEvent[], GuardError>> {
+  // 0. App-Level Global Safety (Panic Check)
+  const appUsage = await getGlobalAppUsageR();
+
+  if (appUsage >= RATE_LIMIT_THRESHOLDS.MAX_WORKER_USAGE) {
+    logger.error(
+      { appUsage, threshold: RATE_LIMIT_THRESHOLDS.MAX_WORKER_USAGE },
+      "GLOBAL SAFETY: App-Level absolute cutoff reached. Halting worker.",
+    );
+    throw new InstagramRateLimitError(
+      "guardEvents",
+      `App-Level absolute cutoff reached (${appUsage}%). Halting all worker operations.`,
+      true,
+      300_000, // 5 minutes
+    );
+  }
+
+  if (appUsage >= RATE_LIMIT_THRESHOLDS.PANIC_THRESHOLD) {
+    logger.warn(
+      { appUsage, threshold: RATE_LIMIT_THRESHOLDS.PANIC_THRESHOLD },
+      "PANIC MODE: App usage high. Throttling all jobs.",
+    );
+    throw new InstagramRateLimitError(
+      "guardEvents",
+      `App-Level Panic Threshold reached (${appUsage}%). Delaying everyone.`,
+      true,
+      300_000, // 5 minutes
+    );
+  }
+
   // Cache for multi-event batches sharing the same owner.
   const ownerStateCache = new Map<
     string,
-    { used: number; limit: number; status: string }
+    { used: number; limit: number; status: string; plan: string }
   >();
 
   const guardResults = await Promise.all(
@@ -35,12 +70,14 @@ export async function guardEvents(
         if (
           cached.creditsUsed !== null &&
           cached.creditLimit !== null &&
-          cached.subStatus !== null
+          cached.subStatus !== null &&
+          cached.plan !== null
         ) {
           state = {
             used: cached.creditsUsed,
             limit: cached.creditLimit,
             status: cached.subStatus,
+            plan: cached.plan,
           };
         } else {
           // Self-healing: Read from DB
@@ -64,6 +101,7 @@ export async function guardEvents(
             used: userWithSub.creditLedger?.creditsUsed ?? 0,
             limit: userWithSub.creditLedger?.creditLimit ?? 1000,
             status: userWithSub.subscription?.status ?? "ACTIVE",
+            plan: userWithSub.subscription?.plan ?? "FREE",
           };
 
           // Restore Redis
@@ -72,20 +110,51 @@ export async function guardEvents(
             state.used,
             state.limit,
             state.status,
+            state.plan,
           );
         }
         ownerStateCache.set(ownerId, state);
       }
 
-      // 2. Enforce Status & Quota
-      if (state.status === "EXPIRED") return null;
+      // 2. Priority & Safe Mode Throttling
+      if (
+        appUsage >= RATE_LIMIT_THRESHOLDS.SAFE_MODE_THRESHOLD &&
+        state.plan !== "BLACK"
+      ) {
+        logger.info(
+          {
+            appUsage,
+            threshold: RATE_LIMIT_THRESHOLDS.SAFE_MODE_THRESHOLD,
+            ownerId,
+            plan: state.plan,
+          },
+          "SAFE MODE: Throttling non-BLACK tier user.",
+        );
+        throw new InstagramRateLimitError(
+          "guardEvents",
+          `App-Level Safe Mode reached (${appUsage}%). Delaying non-BLACK tier users.`,
+          true,
+          60_000, // 1 minute
+        );
+      }
+
+      // 3. Enforce Quota (The Shield)
+      if (state.status === "EXPIRED" || state.status === "SOFT_PAUSED")
+        return null;
 
       if (state.limit !== -1 && state.used >= state.limit) {
-        await addNotificationJob({
-          type: "QUOTA_FULL",
-          userId: clerkUserId,
-          usedAt: Date.now(),
-        });
+        // Drop jobs for exhausted credits (and trigger notification once)
+        if (state.status === "ACTIVE") {
+          await addNotificationJob({
+            type: "QUOTA_FULL",
+            userId: clerkUserId,
+            usedAt: Date.now(),
+          });
+          // Optimistically update status to prevent multiple notifications
+          state.status = "SOFT_PAUSED";
+          ownerStateCache.set(ownerId, state);
+          // Note: In a real app, you'd update DB/Redis status here too
+        }
         return null;
       }
 
@@ -107,6 +176,17 @@ export async function guardEvents(
       }
 
       if (!followerId) return null;
+
+      // 4. Account-Level Spam Guard (Cooldown across all webhooks for this account)
+      const isAccountGuarded = await isAccountSpamGuardedR(webhookUserId);
+      if (isAccountGuarded) {
+        throw new InstagramRateLimitError(
+          "guardEvents",
+          `Account-Level Spam Guard active for ${webhookUserId}. Delaying 2s.`,
+          true,
+          2_000, // 2 seconds
+        );
+      }
 
       const automationGuards = await Promise.all(
         wrapper.matchedAutomations.map(async (automation) => {

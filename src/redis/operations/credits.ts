@@ -9,15 +9,23 @@ export async function getCreditStateR(clerkUserId: string): Promise<{
   creditsUsed: number | null;
   creditLimit: number | null;
   subStatus: string | null;
+  plan: string | null;
 }> {
   const redis = getRedisClient();
-  if (!redis) return { creditsUsed: null, creditLimit: null, subStatus: null };
+  if (!redis)
+    return {
+      creditsUsed: null,
+      creditLimit: null,
+      subStatus: null,
+      plan: null,
+    };
 
   try {
-    const [used, limit, status] = await redis.mget(
+    const [used, limit, status, plan] = await redis.mget(
       KEYS.CREDIT_USED(clerkUserId),
       KEYS.CREDIT_LIMIT(clerkUserId),
       KEYS.SUB_STATUS(clerkUserId),
+      KEYS.PLAN(clerkUserId),
     );
 
     const parsedUsed = used !== null ? parseInt(used, 10) : null;
@@ -34,10 +42,16 @@ export async function getCreditStateR(clerkUserId: string): Promise<{
       creditLimit:
         parsedLimit !== null && !isNaN(parsedLimit) ? parsedLimit : null,
       subStatus: validatedStatus,
+      plan: plan || null,
     };
   } catch (error: any) {
     logger.warn({ error, clerkUserId }, "getCreditStateR failed");
-    return { creditsUsed: null, creditLimit: null, subStatus: null };
+    return {
+      creditsUsed: null,
+      creditLimit: null,
+      subStatus: null,
+      plan: null,
+    };
   }
 }
 
@@ -49,6 +63,7 @@ export async function setCreditStateR(
   creditsUsed: number,
   creditLimit: number,
   subStatus: string,
+  plan: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
@@ -59,6 +74,7 @@ export async function setCreditStateR(
     pipeline.set(KEYS.CREDIT_USED(clerkUserId), creditsUsed.toString(), "NX");
     pipeline.set(KEYS.CREDIT_LIMIT(clerkUserId), creditLimit.toString());
     pipeline.set(KEYS.SUB_STATUS(clerkUserId), subStatus);
+    pipeline.set(KEYS.PLAN(clerkUserId), plan);
     await pipeline.exec();
   } catch (error: any) {
     logger.warn({ error, clerkUserId }, "setCreditStateR failed");

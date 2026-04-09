@@ -17,8 +17,9 @@ export const RATE_LIMITS = {
 } as const;
 
 export const RATE_LIMIT_THRESHOLDS = {
-  APP_USAGE_STOP_PERCENT: 85,
-  ACCOUNT_USAGE_STOP_PERCENT: 90,
+  SAFE_MODE_THRESHOLD: 85,
+  PANIC_THRESHOLD: 90,
+  MAX_WORKER_USAGE: 95,
 } as const;
 
 export const QUICK_REPLIES = {

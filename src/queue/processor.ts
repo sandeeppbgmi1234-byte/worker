@@ -67,7 +67,8 @@ export async function processWebhookJob(
     }
     if (err instanceof InstagramRateLimitError) {
       jobLogger.warn(`Instagram Rate Limit hit. Delaying job.`);
-      const delayMs = err.isAppLevel ? 5 * 60_000 : 10 * 60_000;
+      const defaultDelay = err.isAppLevel ? 5 * 60_000 : 10 * 60_000;
+      const delayMs = err.retryAfterMs ?? defaultDelay;
       await job.moveToDelayed(Date.now() + delayMs, token);
       throw new DelayedError();
     }

@@ -16,6 +16,7 @@ import { RefinedEvent, FilteredEvent } from "../types";
 import { Automation } from "@prisma/client";
 import { Result, ok } from "../helpers/result";
 import { FilterError } from "../errors/pipeline.errors";
+import { logger } from "../logger";
 
 export async function filterEvents(
   events: RefinedEvent[],
@@ -142,6 +143,13 @@ export async function filterEvents(
         );
 
         for (const automation of specificAutomations) {
+          if (automation.matchType === "REGEX") {
+            logger.warn(
+              { automationId: automation.id },
+              "Skipping automation with unsupported REGEX matchType",
+            );
+            continue;
+          }
           const commentText = textTarget.toLowerCase().trim();
           let isMatch = false;
 
@@ -178,7 +186,7 @@ export async function filterEvents(
           } as FilteredEvent;
         }
         return null;
-      } catch (err) {
+      } catch (err: any) {
         return null;
       }
     }),

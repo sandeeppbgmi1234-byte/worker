@@ -74,6 +74,8 @@ export const KEYS = {
   APP_USAGE: () => `ig:rate_limit:app_usage`,
   ACCOUNT_USAGE: (webhookUserId: string) =>
     `ig:rate_limit:account:${webhookUserId}`,
+  ACCOUNT_SPAM_GUARD: (webhookUserId: string) =>
+    `ig:spam_guard:account:${webhookUserId}`,
 
   // Domain: Automations — ALL scoped to webhookUserId (178...)
   AUTOMATION_BY_ID: (webhookUserId: string, automationId: string) =>
@@ -89,10 +91,6 @@ export const KEYS = {
   INSTAGRAM_POSTS: (webhookUserId: string) => `ig:posts:${webhookUserId}`,
   INSTAGRAM_STORIES: (webhookUserId: string) => `ig:stories:${webhookUserId}`,
 
-  // Domain: Predicted API Metrics
-  PREDICTED_USAGE: (webhookUserId: string) =>
-    `ig:rate_limit:predicted:${webhookUserId}`,
-
   // Domain: Buffers (Async Persistence)
   PENDING_OUTCOMES: "pending:outcomes:buffer",
 
@@ -103,6 +101,8 @@ export const KEYS = {
     `billing:credits:limit:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
   SUB_STATUS: (clerkId: string) =>
     `billing:sub:status:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
+  PLAN: (clerkId: string) =>
+    `billing:plan:${clerkId.startsWith("user_") ? clerkId : `user_${clerkId}`}`,
   // Domain: Notifications (BullMQ)
   NOTIFICATIONS_QUEUE: "notifications",
 } as const;

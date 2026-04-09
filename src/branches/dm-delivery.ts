@@ -1,7 +1,4 @@
-import {
-  checkRateLimits,
-  incrementApiUsage,
-} from "../redis/operations/rate-limit";
+import { checkRateLimits } from "../redis/operations/rate-limit";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
@@ -37,7 +34,6 @@ export async function executeDmDelivery(
   }
 
   await checkRateLimits(instagramUserId);
-  await incrementApiUsage(instagramUserId, 1); // Always 1 now
 
   // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
   // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.

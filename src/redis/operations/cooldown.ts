@@ -258,3 +258,30 @@ export async function setFollowWarningSentR(
     logger.warn({ error, key }, `setFollowWarningSentR failed for key=${key}`);
   }
 }
+export async function isAccountSpamGuardedR(
+  webhookUserId: string,
+): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+  const key = KEYS.ACCOUNT_SPAM_GUARD(webhookUserId);
+  try {
+    const exists = await redis.exists(key);
+    return exists > 0;
+  } catch (error: any) {
+    return false;
+  }
+}
+
+export async function setAccountSpamGuardR(
+  webhookUserId: string,
+  ttlSeconds: number = 2,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const key = KEYS.ACCOUNT_SPAM_GUARD(webhookUserId);
+  try {
+    await redis.set(key, "1", "EX", ttlSeconds);
+  } catch (error: any) {
+    // Ignore
+  }
+}

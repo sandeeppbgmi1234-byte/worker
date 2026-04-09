@@ -30,7 +30,6 @@ export {
 export {
   updateRateLimitsFromHeadersR,
   checkRateLimits,
-  incrementApiUsage,
 } from "./operations/rate-limit";
 
 export {

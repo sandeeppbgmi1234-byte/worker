@@ -25,6 +25,8 @@ export async function updateRateLimitsFromHeadersR(
         appUsage.call_count || 0,
         appUsage.total_time || 0,
         appUsage.total_cputime || 0,
+        appUsage.call_volume || 0,
+        appUsage.cpu_time || 0,
       );
       if (usage > 0) {
         pipeline.set(KEYS.APP_USAGE(), usage.toString(), "EX", TTL.API_USAGE);
@@ -36,12 +38,15 @@ export async function updateRateLimitsFromHeadersR(
       let maxAccountUsage = 0;
       for (const key of Object.keys(businessUsage)) {
         const metrics = businessUsage[key];
-        if (Array.isArray(metrics) && metrics.length > 0) {
-          const m = metrics[0];
+        // Handle both Array format and single object format
+        const m = Array.isArray(metrics) ? metrics[0] : metrics;
+        if (m) {
           const usage = Math.max(
             m.call_count || 0,
             m.total_time || 0,
             m.total_cputime || 0,
+            m.call_volume || 0,
+            m.cpu_time || 0,
           );
           if (usage > maxAccountUsage) maxAccountUsage = usage;
         }
@@ -89,43 +94,29 @@ export async function checkRateLimits(webhookUserId: string): Promise<void> {
   const appUsage = appUsageStr ? parseInt(appUsageStr, 10) : 0;
   const accountUsage = accountUsageStr ? parseInt(accountUsageStr, 10) : 0;
 
-  if (appUsage >= RATE_LIMIT_THRESHOLDS.APP_USAGE_STOP_PERCENT) {
+  if (appUsage >= RATE_LIMIT_THRESHOLDS.PANIC_THRESHOLD) {
     throw new InstagramRateLimitError(
       "checkRateLimits",
-      `App-Level Rate Limit at ${appUsage}%`,
+      `App-Level Panic Threshold at ${appUsage}%`,
       true,
     );
   }
 
-  if (accountUsage >= RATE_LIMIT_THRESHOLDS.ACCOUNT_USAGE_STOP_PERCENT) {
+  if (accountUsage >= RATE_LIMIT_THRESHOLDS.PANIC_THRESHOLD) {
     throw new InstagramRateLimitError(
       "checkRateLimits",
-      `Account-Level Rate Limit at ${accountUsage}%`,
+      `Account-Level Panic Threshold at ${accountUsage}%`,
       false,
     );
   }
 }
 
 /**
- * Increments predicted usage for short-term throttling.
+ * Returns the current global app-level usage percentage.
  */
-export async function incrementApiUsage(
-  webhookUserId: string,
-  count: number = 1,
-): Promise<void> {
+export async function getGlobalAppUsageR(): Promise<number> {
   const redis = getRedisClient();
-  if (!redis) return;
-
-  const key = KEYS.PREDICTED_USAGE(webhookUserId);
-  try {
-    const pipeline = redis.pipeline();
-    pipeline.incrby(key, count);
-    pipeline.expire(key, TTL.API_USAGE);
-    await pipeline.exec();
-  } catch (error: any) {
-    logger.debug(
-      { error: error.message },
-      "Failed to increment predicted API usage",
-    );
-  }
+  if (!redis) return 0;
+  const usage = await redis.get(KEYS.APP_USAGE());
+  return usage ? parseInt(usage, 10) : 0;
 }

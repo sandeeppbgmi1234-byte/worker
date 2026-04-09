@@ -35,7 +35,8 @@ export function processMessagingEntry(
     } else if (
       msg.message?.text &&
       msg.message?.mid &&
-      !msg.message?.quick_reply
+      !msg.message?.quick_reply &&
+      msg.sender?.id
     ) {
       // Process Standard DM (if it's not a story reply or quick reply)
       events.push({
@@ -56,9 +57,10 @@ export function processMessagingEntry(
     const qrPayload =
       msg.message?.quick_reply?.payload || msg.postback?.payload;
     if (
-      qrPayload?.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX) ||
-      qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX) ||
-      qrPayload?.startsWith(QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX)
+      (qrPayload?.startsWith(QUICK_REPLIES.BYPASS.PAYLOAD_PREFIX) ||
+        qrPayload?.startsWith(QUICK_REPLIES.FOLLOW_CONFIRM.PAYLOAD_PREFIX) ||
+        qrPayload?.startsWith(QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX)) &&
+      msg.sender?.id
     ) {
       events.push({
         type: "QUICK_REPLY",

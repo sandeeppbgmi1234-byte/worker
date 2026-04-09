@@ -10,6 +10,7 @@ import {
   clearPendingConfirmationR,
   setUserCooldownR,
   setAskResolvedR,
+  setAccountSpamGuardR,
 } from "../redis/operations/cooldown";
 import { QUICK_REPLIES } from "../config/instagram.config";
 import { logger } from "../logger";
@@ -247,12 +248,16 @@ async function runExecutionFlow(
             wrapper.webhookUserId,
           );
 
-          if (openRes.ok && userId)
-            await setPendingConfirmationR(
-              wrapper.webhookUserId,
-              userId,
-              automation.id,
-            );
+          if (openRes.ok && userId) {
+            await Promise.all([
+              setPendingConfirmationR(
+                wrapper.webhookUserId,
+                userId,
+                automation.id,
+              ),
+              setAccountSpamGuardR(wrapper.webhookUserId, 2),
+            ]).catch(() => {});
+          }
 
           if (wrapper.event.type === "COMMENT") {
             await executePublicReply(
@@ -321,7 +326,12 @@ async function runExecutionFlow(
                   userId,
                   automation.id,
                 ),
+                setAccountSpamGuardR(wrapper.webhookUserId, 2),
               ]).catch(() => {});
+            } else {
+              await setAccountSpamGuardR(wrapper.webhookUserId, 2).catch(
+                () => {},
+              );
             }
           }
 

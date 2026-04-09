@@ -92,7 +92,6 @@ export async function invalidateUserCacheR(
     pipeline.del(KEYS.ACCOUNT_USAGE(webhookUserId));
     pipeline.del(KEYS.INSTAGRAM_POSTS(webhookUserId));
     pipeline.del(KEYS.INSTAGRAM_STORIES(webhookUserId));
-    pipeline.del(KEYS.PREDICTED_USAGE(webhookUserId));
     pipeline.del(KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(webhookUserId));
 
     // 2. SCAN and delete dynamic automation keys (Post/Story specific)

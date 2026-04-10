@@ -17,6 +17,7 @@ export const TTL = {
   PENDING_CONFIRMATION: 5 * 60, // 5 minutes
   ASK_RESOLVED: 24 * 60 * 60, // 24 hours
   FOLLOW_WARNING: 60 * 60, // 1 hour
+  EVENT_LOCK: 10 * 60, // 10 minutes
 } as const;
 
 // Key generation functions — all IG-scoped keys use instaAccountId, not userId
@@ -24,7 +25,8 @@ export const KEYS = {
   // Domain: User (keyed by webhookUserId 178...)
   USER_CONNECTION: (webhookUserId: string) =>
     `ig:user_connection:${webhookUserId}`,
-  ACCOUNT_BY_IG: (webhookUserId: string) => `ig:account_by_ig:${webhookUserId}`,
+  ACCOUNT_BY_IG: (instagramUserId: string) =>
+    `ig:account_by_ig:${instagramUserId}`,
 
   // Domain: Tokens (keyed by clerkId + webhookUserId)
   ACCESS_TOKEN: (clerkId: string, webhookUserId: string) =>
@@ -40,6 +42,8 @@ export const KEYS = {
   ) => `ig:processed:${webhookUserId}:${commentId}:${automationId}`,
   GLOBAL_EVENT_PROCESSED: (webhookUserId: string, eventId: string) =>
     `ig:global_processed:${webhookUserId}:${eventId}`,
+  EVENT_LOCK: (webhookUserId: string, eventId: string) =>
+    `ig:lock:event:${webhookUserId}:${eventId}`,
 
   // Domain: Throttling / Cooldowns (Worker) — scoped by owner + follower + automation
   USER_THROTTLE: (
@@ -95,12 +99,19 @@ export const KEYS = {
   PENDING_OUTCOMES: "pending:outcomes:buffer",
 
   // Domain: Billing / Credits (keyed by clerkId with user_ prefix)
-  CREDIT_USED: (clerkId: string) => `billing:credits:used:${normalizeClerkId(clerkId)}`,
-  CREDIT_LIMIT: (clerkId: string) => `billing:credits:limit:${normalizeClerkId(clerkId)}`,
-  SUB_STATUS: (clerkId: string) => `billing:sub:status:${normalizeClerkId(clerkId)}`,
+  CREDIT_USED: (clerkId: string) =>
+    `billing:credits:used:${normalizeClerkId(clerkId)}`,
+  CREDIT_LIMIT: (clerkId: string) =>
+    `billing:credits:limit:${normalizeClerkId(clerkId)}`,
+  SUB_STATUS: (clerkId: string) =>
+    `billing:sub:status:${normalizeClerkId(clerkId)}`,
   PLAN: (clerkId: string) => `billing:plan:${normalizeClerkId(clerkId)}`,
   // Domain: Notifications (BullMQ)
   NOTIFICATIONS_QUEUE: "notifications",
+
+  // Domain: Execution Locks
+  EXECUTION_LOCK: (accountId: string, userId: string) =>
+    `ig:lock:execute:account:${accountId}:user:${userId}`,
 } as const;
 
 function normalizeClerkId(clerkId: string): string {

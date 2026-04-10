@@ -15,8 +15,6 @@ model User {
   imageUrl      String?
   createdAt     DateTime       @default(now())
   instaAccounts InstaAccount[]
-  automations   Automation[]
-  forms         Form[]
   subscription  Subscription?
   creditLedger  CreditLedger?
 
@@ -103,8 +101,6 @@ type StoryTarget {
 
 model Automation {
   id             String       @id @default(auto()) @map("_id") @db.ObjectId
-  userId         String       @db.ObjectId
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   instaAccountId String       @db.ObjectId
   instaAccount   InstaAccount @relation(fields: [instaAccountId], references: [id], onDelete: Cascade)
 
@@ -160,11 +156,11 @@ model AutomationExecution {
   automationId String     @db.ObjectId
   automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 
-  // Comment/message details
-  commentId       String
-  commentText     String
-  commentUsername String
-  commentUserId   String
+  // Trigger details (Unified for Comment/DM/Story)
+  eventId        String
+  eventText      String
+  senderId       String
+  senderUsername String
 
   // Execution details
   actionType         String // DM or COMMENT_REPLY
@@ -175,7 +171,7 @@ model AutomationExecution {
   executedAt         DateTime @default(now())
   billed             Boolean  @default(false)
 
-  @@unique([commentId, automationId])
+  @@unique([eventId, automationId])
   @@index([automationId, status])
   @@map("automation_executions")
 }
@@ -213,8 +209,6 @@ type FormFieldEntry {
 
 model Form {
   id             String       @id @default(auto()) @map("_id") @db.ObjectId
-  userId         String       @db.ObjectId
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   instaAccountId String       @db.ObjectId
   instaAccount   InstaAccount @relation(fields: [instaAccountId], references: [id], onDelete: Cascade)
 

@@ -25,6 +25,7 @@ export {
   isAskResolvedR,
   setAskResolvedR,
   clearAskResolvedR,
+  acquireFollowWarningFlagR,
 } from "./operations/cooldown";
 
 export {
@@ -43,4 +44,5 @@ export {
   getCreditStateR,
   setCreditStateR,
   incrementCreditUsedR,
+  reserveCreditsR,
 } from "./operations/credits";

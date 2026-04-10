@@ -95,3 +95,25 @@ export async function findActiveAutomationsForAccountDM(
     },
   );
 }
+export async function pauseAutomation(
+  automationId: string,
+  instaAccountId: string,
+): Promise<Result<Automation, DatabaseError>> {
+  return executeWithErrorHandling(
+    async () => {
+      const result = await prisma.automation.update({
+        where: {
+          id: automationId,
+          instaAccountId,
+        },
+        data: { status: "PAUSED" },
+      });
+      return result;
+    },
+    {
+      operation: "pauseAutomation",
+      model: "Automation",
+      retries: 1,
+    },
+  );
+}

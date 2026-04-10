@@ -1,7 +1,8 @@
 import { RefinedEvent } from "../types";
 import { acquireEventLockR, isEventHandledR } from "../redis/operations/event";
 import { Result, ok, fail } from "../helpers/result";
-import { GuardError } from "../errors/pipeline.errors";
+import { GuardError, EnrichmentError } from "../errors/pipeline.errors";
+import { logger } from "../logger";
 
 /**
  * Early-exit Guard: Checks if the event ID has already been seen by the system.
@@ -43,12 +44,11 @@ export async function dedupeEvents(
       );
       if (lockRes === "LOCKED") continue;
       if (lockRes === "ERROR") {
-        return fail(
-          new GuardError(
-            "dedupeEvents",
-            `Redis error acquiring lock: ${eventId}`,
-          ),
+        logger.error(
+          { eventId, webhookUserId: eventWrapper.instagramUserId },
+          "Redis error acquiring processing lock. Skipping event to prevent dual-processing or blocking batch.",
         );
+        continue;
       }
     }
 

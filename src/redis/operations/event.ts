@@ -38,10 +38,10 @@ export async function acquireEventLockR(
   if (!redis) return "ERROR";
 
   // Lock is also scoped by account just in case, though messageId is mostly global
-  const key = `lock:event:${webhookUserId}:${eventId}`;
+  const key = KEYS.EVENT_LOCK(webhookUserId, eventId);
 
   try {
-    const result = await redis.set(key, "1", "EX", 600, "NX");
+    const result = await redis.set(key, "1", "EX", TTL.EVENT_LOCK, "NX");
     // If result is "OK", the lock was acquired
     return result === "OK" ? "ACQUIRED" : "LOCKED";
   } catch (error: any) {

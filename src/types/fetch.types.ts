@@ -14,5 +14,5 @@ export interface InstagramFetchOptions extends Omit<RequestInit, "body"> {
   body?: any;
   timeoutMs?: number;
   retries?: number;
-  instagramUserId?: string;
+  webhookUserId?: string;
 }

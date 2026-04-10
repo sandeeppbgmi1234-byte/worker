@@ -33,7 +33,14 @@ export async function executeDmDelivery(
     return ok({ sentMessage: "", instagramMessageId: null });
   }
 
-  await checkRateLimits(webhookUserId);
+  try {
+    await checkRateLimits(webhookUserId);
+  } catch (error: any) {
+    if (error instanceof BaseError) return fail(error);
+    return fail(
+      new BaseError("DmDelivery", error?.message || String(error), {}, error),
+    );
+  }
 
   // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
   // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.
@@ -76,7 +83,7 @@ export async function executeDmDelivery(
     {
       method: "POST",
       body,
-      instagramUserId: webhookUserId,
+      webhookUserId,
       retries: 0,
     },
   );

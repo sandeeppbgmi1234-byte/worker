@@ -47,7 +47,7 @@ export async function fetchFromInstagram<T = any>(
   const {
     timeoutMs = RATE_LIMITS.REQUEST_TIMEOUT_MS,
     retries = 2,
-    instagramUserId,
+    webhookUserId,
     ...init
   } = options;
   const url = endpoint.startsWith("http")
@@ -88,9 +88,9 @@ export async function fetchFromInstagram<T = any>(
 
       const { appUsage, businessUsage, adUsage } =
         extractUsageHeaders(response);
-      if (instagramUserId && (appUsage || businessUsage || adUsage)) {
+      if (webhookUserId && (appUsage || businessUsage || adUsage)) {
         await updateRateLimitsFromHeadersR(
-          instagramUserId,
+          webhookUserId,
           appUsage,
           businessUsage,
           adUsage,
@@ -110,7 +110,7 @@ export async function fetchFromInstagram<T = any>(
         ) {
           logger.warn(
             {
-              instagramUserId,
+              webhookUserId,
               errorCode: code,
               errorSubcode: errorBody?.error?.error_subcode,
               message: errorBody?.error?.message,
@@ -163,7 +163,7 @@ export async function fetchFromInstagram<T = any>(
       if (errorInstance.retryable && attempt <= retries) {
         const backoff = Math.pow(2, attempt) * 1000;
         logger.warn(
-          { attempt, retries, backoff, endpoint, igUserId: instagramUserId },
+          { attempt, retries, backoff, endpoint, igUserId: webhookUserId },
           `Retrying Instagram API request`,
         );
         await new Promise((r) => setTimeout(r, backoff));

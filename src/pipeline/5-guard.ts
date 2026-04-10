@@ -11,12 +11,16 @@ import {
   QUICK_REPLIES,
   RATE_LIMIT_THRESHOLDS,
 } from "../config/instagram.config";
-import { Result, ok } from "../helpers/result";
+import { Result, ok, fail } from "../helpers/result";
 import { GuardError } from "../errors/pipeline.errors";
 import { getGlobalAppUsageR } from "../redis/operations/rate-limit";
 import { InstagramRateLimitError } from "../errors/instagram.errors";
 import { Automation } from "@prisma/client";
-import { getCreditStateR, setCreditStateR } from "../redis/operations/credits";
+import {
+  getCreditStateR,
+  setCreditStateR,
+  reserveCreditsR,
+} from "../redis/operations/credits";
 import { addNotificationJob } from "../queue/notifications";
 import { prisma } from "../db/db";
 import { logger } from "../logger";
@@ -32,11 +36,18 @@ export async function guardEvents(
       { appUsage, threshold: RATE_LIMIT_THRESHOLDS.MAX_WORKER_USAGE },
       "GLOBAL SAFETY: App-Level absolute cutoff reached. Halting worker.",
     );
-    throw new InstagramRateLimitError(
-      "guardEvents",
-      `App-Level absolute cutoff reached (${appUsage}%). Halting all worker operations.`,
-      true,
-      300_000, // 5 minutes
+    return fail(
+      new GuardError(
+        "guardEvents",
+        `App-Level absolute cutoff reached (${appUsage}%).`,
+        { appUsage },
+        new InstagramRateLimitError(
+          "guardEvents",
+          "Absolute cutoff reached",
+          true,
+          300_000,
+        ),
+      ),
     );
   }
 
@@ -45,11 +56,18 @@ export async function guardEvents(
       { appUsage, threshold: RATE_LIMIT_THRESHOLDS.PANIC_THRESHOLD },
       "PANIC MODE: App usage high. Throttling all jobs.",
     );
-    throw new InstagramRateLimitError(
-      "guardEvents",
-      `App-Level Panic Threshold reached (${appUsage}%). Delaying everyone.`,
-      true,
-      300_000, // 5 minutes
+    return fail(
+      new GuardError(
+        "guardEvents",
+        `App-Level Panic Threshold reached (${appUsage}%).`,
+        { appUsage },
+        new InstagramRateLimitError(
+          "guardEvents",
+          "Panic Threshold reached",
+          true,
+          300_000,
+        ),
+      ),
     );
   }
 
@@ -169,53 +187,15 @@ export async function guardEvents(
             continue;
           }
 
-          if (state.limit !== -1 && state.used >= state.limit) {
-            if (state.status === "ACTIVE") {
-              await addNotificationJob({
-                type: "QUOTA_FULL",
-                userId: clerkUserId,
-                usedAt: Date.now(),
-              });
-              // Persist the pause
-              await prisma.subscription
-                .update({
-                  where: { userId: ownerId },
-                  data: { status: "SOFT_PAUSED" },
-                })
-                .catch((err) =>
-                  logger.error({ err, ownerId }, "Failed to persist status"),
-                );
-
-              await setCreditStateR(
-                clerkUserId,
-                state.used,
-                state.limit,
-                "SOFT_PAUSED",
-                state.plan,
-              );
-              state.status = "SOFT_PAUSED";
-            }
-            batchResults.push({
-              success: false,
-              errorType: "quota_exceeded",
-              error: new Error("Quota exceeded"),
-              wrapper,
-            });
-            continue;
-          }
-
-          // Local reservation
-          state.used += 1;
-
           let followerId = "";
           switch (wrapper.event.type) {
             case "COMMENT":
-              followerId = wrapper.event.event.userId;
+              followerId = (wrapper.event.event as any).userId;
               break;
             case "STORY_REPLY":
             case "DM_MESSAGE":
             case "QUICK_REPLY":
-              followerId = wrapper.event.event.senderId;
+              followerId = (wrapper.event.event as any).senderId;
               break;
           }
 
@@ -313,22 +293,40 @@ export async function guardEvents(
             (a): a is Automation => a !== null,
           );
 
-          if (
-            validAutomations.length > 0 ||
-            wrapper.event.type === "QUICK_REPLY"
-          ) {
+          // 5. Atomic Admission
+          const isQuickReply = wrapper.event.type === "QUICK_REPLY";
+          const shouldAdmit = validAutomations.length > 0;
+
+          if (shouldAdmit) {
+            // Only reserve for events that will trigger an action
+            const reservation = await reserveCreditsR(clerkUserId, ownerId, 1);
+            if (!reservation.success) {
+              batchResults.push({
+                success: false,
+                errorType: "quota_exceeded",
+                error: new Error("Quota reservation failed"),
+                wrapper,
+              });
+              continue;
+            }
+
             batchResults.push({
               success: true,
               data: {
                 ...wrapper,
                 safeAutomations: validAutomations,
+                dbReserved: reservation.dbReserved,
               } as GuardedEvent,
             });
           } else {
             batchResults.push({
               success: false,
-              errorType: "no_valid_automations",
-              error: new Error("All matched automations filtered by guard"),
+              errorType: isQuickReply ? "qr_ignored" : "no_valid_automations",
+              error: new Error(
+                isQuickReply
+                  ? "Quick reply has no valid targets"
+                  : "All matched automations filtered by guard",
+              ),
               wrapper,
             });
           }
@@ -353,16 +351,36 @@ export async function guardEvents(
     .filter((res) => res.success)
     .map((res) => (res as any).data as GuardedEvent);
 
-  const throttleErrors = flatResults.filter(
-    (res) => !res.success && res.errorType === "throttle",
-  );
-  if (throttleErrors.length > 0) {
-    // If ANY event in the batch was throttled, we can choose to surface it as a Result.fail
-    // so the whole job retries, OR we can just proceed with what we have.
-    // The instructions suggest treating them specially.
+  const guardFailures = flatResults.filter((res) => !res.success);
+
+  if (guardFailures.length > 0) {
     logger.warn(
-      { count: throttleErrors.length },
-      "Some events were throttled during guard stage. Continuing with non-throttled events.",
+      {
+        failureCount: guardFailures.length,
+        successCount: guardedEvents.length,
+        failureTypes: Array.from(
+          new Set(guardFailures.map((f: any) => f.errorType)),
+        ),
+      },
+      "Guard Stage: Some events were filtered out or failed guard checks.",
+    );
+  }
+
+  const FATAL_ERROR_TYPES = ["unknown_error", "billing_missing"];
+  const fatalErrors = guardFailures.filter((f: any) =>
+    FATAL_ERROR_TYPES.includes(f.errorType),
+  );
+
+  if (fatalErrors.length > 0) {
+    return fail(
+      new GuardError(
+        "guardEvents",
+        "Guard stage encountered fatal batch errors",
+        {
+          count: fatalErrors.length,
+          errors: fatalErrors.slice(0, 5).map((e: any) => e.errorType),
+        },
+      ),
     );
   }
 

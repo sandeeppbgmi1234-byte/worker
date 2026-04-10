@@ -109,6 +109,7 @@ export interface EnrichedEvent extends FilteredEvent {
 
 export interface GuardedEvent extends EnrichedEvent {
   safeAutomations: Automation[];
+  dbReserved: boolean;
 }
 
 export interface ExecutionOutcome {
@@ -130,4 +131,5 @@ export interface ExecutionOutcome {
   instagramMessageId?: string | null;
   actionType: string;
   commentData: any;
+  dbReserved?: boolean;
 }

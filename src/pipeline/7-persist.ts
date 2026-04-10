@@ -46,19 +46,6 @@ export async function persistOutcomes(
         }
       }
     }
-
-    // Now that outcomes are safely buffered, mark events as permanently handled
-    // Use composite key to prevent cross-tenant deduplication issues
-    const uniqueEvents = Array.from(
-      new Map(
-        outcomes.map((o) => [`${o.webhookUserId}:${o.eventId}`, o]),
-      ).values(),
-    );
-    await Promise.all(
-      uniqueEvents.map((o) => setEventHandledR(o.webhookUserId, o.eventId)),
-    );
-
-    return ok(undefined);
   } catch (error: any) {
     logger.error(
       { error: error.message },
@@ -66,6 +53,33 @@ export async function persistOutcomes(
     );
     return persistOutcomesSync(outcomes);
   }
+
+  // Now that outcomes are safely buffered, mark events as permanently handled
+  try {
+    const uniqueEvents = Array.from(
+      new Map(
+        outcomes.map((o) => [`${o.webhookUserId}:${o.eventId}`, o]),
+      ).values(),
+    );
+    await Promise.all(
+      uniqueEvents.map((o) =>
+        setEventHandledR(o.webhookUserId, o.eventId).catch((e) =>
+          logger.warn(
+            { eventId: o.eventId, err: e.message },
+            "Minor: Failed to mark event as handled in Redis after successful buffering",
+          ),
+        ),
+      ),
+    );
+  } catch (error: any) {
+    // Non-fatal error as the buffer is already written
+    logger.warn(
+      { error: error.message },
+      "Outcome marker set partially failed",
+    );
+  }
+
+  return ok(undefined);
 }
 
 /**
@@ -85,16 +99,32 @@ async function persistOutcomesSync(
 
       await executeTransaction(
         async (tx) => {
-          await tx.automationExecution.create({
-            data: {
+          const executionKey = {
+            eventId: outcome.eventId || "unknown_event",
+            automationId: outcome.automationId,
+          };
+
+          const execution = await tx.automationExecution.upsert({
+            where: {
+              eventId_automationId: executionKey,
+            },
+            update: {
+              status: outcome.status,
+              errorMessage: outcome.errorMessage || "",
+              instagramMessageId: outcome.instagramMessageId || "",
+              sentMessage: outcome.sentMessage || "",
+              executedAt: new Date(),
+              // Do not overwrite billed if it's already true
+            },
+            create: {
               automationId: outcome.automationId,
-              commentId: outcome.eventId || "unknown_event",
-              commentText: outcome.commentData.text || "Interaction",
-              commentUsername:
+              eventId: executionKey.eventId,
+              eventText: outcome.commentData.text || "Interaction",
+              senderUsername:
                 outcome.commentData.username ||
                 outcome.commentData.senderId ||
                 "unknown",
-              commentUserId:
+              senderId:
                 outcome.commentData.userId ||
                 outcome.commentData.senderId ||
                 "unknown",
@@ -104,11 +134,14 @@ async function persistOutcomesSync(
               errorMessage: outcome.errorMessage || "",
               instagramMessageId: outcome.instagramMessageId || "",
               executedAt: new Date(),
-              billed: isBillable,
+              billed: !!outcome.dbReserved,
             },
           });
 
-          if (isBillable) {
+          const shouldBillNow =
+            isBillable && !execution.billed && !outcome.dbReserved;
+
+          if (shouldBillNow) {
             // AUTHORITATIVE BILLING: Update DB ledger inside transaction
             const userState = await tx.user.findUnique({
               where: { clerkId: outcome.clerkUserId },
@@ -134,6 +167,12 @@ async function persistOutcomesSync(
                   creditsUsed: { increment: 1 },
                 },
               });
+
+              // Mark execution as billed successfully
+              await tx.automationExecution.update({
+                where: { id: execution.id },
+                data: { billed: true },
+              });
             }
           }
 
@@ -158,9 +197,6 @@ async function persistOutcomesSync(
         await setEventHandledR(outcome.webhookUserId, outcome.eventId).catch(
           () => {},
         );
-      }
-      if (isBillable) {
-        await incrementCreditUsedR(outcome.clerkUserId).catch(() => {});
       }
     } catch (error: any) {
       hasFailure = true;

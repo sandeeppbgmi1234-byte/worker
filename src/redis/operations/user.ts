@@ -67,7 +67,12 @@ export async function setUserConnectedR(webhookUserId: string): Promise<void> {
   const key = KEYS.USER_CONNECTION(webhookUserId);
   try {
     await redis.set(key, "1", "EX", TTL.USER_CONNECTED);
-  } catch (error: any) {}
+  } catch (error: any) {
+    logger.error(
+      { webhookUserId, error: error.message },
+      "setUserConnectedR failed",
+    );
+  }
 }
 
 /**
@@ -89,8 +94,6 @@ export async function invalidateUserCacheR(
     pipeline.del(KEYS.USER_CONNECTION(webhookUserId));
     if (instagramUserId) {
       pipeline.del(KEYS.ACCOUNT_BY_IG(instagramUserId));
-    } else {
-      pipeline.del(KEYS.ACCOUNT_BY_IG(webhookUserId));
     }
     pipeline.del(KEYS.ACCESS_TOKEN(clerkId, webhookUserId));
     pipeline.del(KEYS.TOKEN_REFRESH_LOCK(webhookUserId));
@@ -100,17 +103,32 @@ export async function invalidateUserCacheR(
     pipeline.del(KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(webhookUserId));
 
     // 2. SCAN and delete dynamic automation keys (Post/Story specific)
-    // Format: ig:automation:post:<webhookUserId>:*
+    const types = ["post", "story", "dm"];
+    for (const type of types) {
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await redis.scan(
+          cursor,
+          "MATCH",
+          `ig:automation:${type}:${webhookUserId}:*`,
+          "COUNT",
+          100,
+        );
+        cursor = nextCursor;
+        if (keys.length > 0) pipeline.del(...keys);
+      } while (cursor !== "0");
+    }
+
+    // 3. Scan for general automation keys (ig:automation:<webhookUserId>:<automationId>)
     let cursor = "0";
     do {
       const [nextCursor, keys] = await redis.scan(
         cursor,
         "MATCH",
-        `ig:automation:*:${webhookUserId}:*`,
+        `ig:automation:${webhookUserId}:*`,
         "COUNT",
         100,
       );
-
       cursor = nextCursor;
       if (keys.length > 0) pipeline.del(...keys);
     } while (cursor !== "0");

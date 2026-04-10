@@ -28,11 +28,17 @@ export function getNotificationsQueue(): Queue {
   return notificationsQueue;
 }
 
-export type NotificationPayload = {
-  type: "QUOTA_FULL";
-  userId: string;
-  usedAt: number;
-};
+export type NotificationPayload =
+  | {
+      type: "QUOTA_FULL";
+      userId: string;
+      usedAt: number;
+    }
+  | {
+      type: "REGEX_UNSUPPORTED";
+      userId: string;
+      automationId: string;
+    };
 
 /**
  * Pushes a notification job to the queue.
@@ -49,7 +55,12 @@ export async function addNotificationJob(payload: NotificationPayload) {
       .digest("hex")
       .substring(0, 10);
 
-    const jobId = `quota_full-${hashedUserId}-${windowId}`;
+    const typePrefix =
+      payload.type === "QUOTA_FULL" ? "quota_full" : "regex_ns";
+    const subId =
+      payload.type === "REGEX_UNSUPPORTED" ? payload.automationId : windowId;
+
+    const jobId = `${typePrefix}-${hashedUserId}-${subId}`;
     await queue.add(payload.type, payload, {
       jobId,
     });

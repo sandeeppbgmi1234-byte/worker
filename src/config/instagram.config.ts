@@ -61,3 +61,7 @@ export const ERROR_MESSAGES = {
     MESSAGE_TOO_LONG: "Message exceeds maximum length of 1000 characters.",
   },
 } as const;
+export const MESSAGING_DEFAULTS = {
+  FOLLOW_REMINDER:
+    "Please follow to access the link 🔔. This reminder expires after one hour ⏳. Once you have followed, click ‘I am Following’ above to continue ✅",
+} as const;

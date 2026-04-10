@@ -15,6 +15,7 @@ import {
 import { QUICK_REPLIES } from "../config/instagram.config";
 import { logger } from "../logger";
 import { getRedisClient } from "../redis/client";
+import { KEYS, TTL } from "../redis/keys";
 import { executePublicReply } from "../branches/public-reply";
 
 /**
@@ -55,7 +56,7 @@ export async function executeEvents(
       try {
         // --- CRITICAL-2: ACQUIRE PER-USER-PER-ACCOUNT EXECUTION LOCK (30s) ---
         if (userId) {
-          const lockKey = `lock:execute:account:${wrapper.accountId}:user:${userId}`;
+          const lockKey = KEYS.EXECUTION_LOCK(wrapper.accountId, userId);
           const redis = getRedisClient();
           if (redis) {
             const lockToken = Math.random().toString(36).substring(2, 15);
@@ -85,6 +86,7 @@ export async function executeEvents(
                     retryable: true,
                     actionType: auto.actionType,
                     commentData: wrapper.event.event,
+                    dbReserved: wrapper.dbReserved,
                   }) as ExecutionOutcome,
               );
             }
@@ -138,6 +140,7 @@ export async function executeEvents(
               errorMessage: err.message || "Unknown execution error",
               actionType: auto.actionType,
               commentData: wrapper.event.event,
+              dbReserved: wrapper.dbReserved,
             }) as ExecutionOutcome,
         );
       }
@@ -236,6 +239,7 @@ async function runExecutionFlow(
             errorMessage: resolvedAskRes.error.message,
             actionType: automation.actionType,
             commentData: wrapper.event.event,
+            dbReserved: wrapper.dbReserved,
           } as ExecutionOutcome;
         }
 
@@ -270,6 +274,7 @@ async function runExecutionFlow(
             status: "ASK_TO_FOLLOW_SENT",
             actionType: automation.actionType,
             commentData: wrapper.event.event,
+            dbReserved: wrapper.dbReserved,
           } as ExecutionOutcome;
         }
 
@@ -319,82 +324,81 @@ async function runExecutionFlow(
               errorMessage: openRes.ok ? undefined : openRes.error.message,
               actionType: automation.actionType,
               commentData: wrapper.event.event,
+              dbReserved: wrapper.dbReserved,
             } as ExecutionOutcome;
           }
         }
 
-        // 2. Public Reply & DM Delivery in Parallel
-        const replyPromise =
-          wrapper.event.type === "COMMENT"
-            ? executePublicReply(
-                wrapper.event.event as any,
-                automation,
-                wrapper.accessToken,
-                wrapper.webhookUserId,
-              )
-            : Promise.resolve(ok(null));
-
-        const dmPromise = executeDmDelivery(
+        // 2. DM Delivery FIRST
+        const dmRes = await executeDmDelivery(
           wrapper.event.event as any,
           automation,
           wrapper.accessToken,
           wrapper.webhookUserId,
         );
 
-        const [replyRes, dmRes] = await Promise.all([replyPromise, dmPromise]);
+        if (!dmRes.ok) {
+          return {
+            automationId: automation.id,
+            clerkUserId: wrapper.clerkUserId,
+            userId: wrapper.userId,
+            webhookUserId: wrapper.webhookUserId,
+            eventId,
+            status: "FAILED",
+            errorMessage: dmRes.error.message,
+            actionType: automation.actionType,
+            commentData: wrapper.event.event,
+            dbReserved: wrapper.dbReserved,
+          } as ExecutionOutcome;
+        }
 
-        if (dmRes.ok) {
-          const isDelivered =
-            dmRes.value.sentMessage || dmRes.value.instagramMessageId;
+        const isDelivered =
+          dmRes.value.sentMessage || dmRes.value.instagramMessageId;
 
-          if (isDelivered) {
-            if (userId) {
-              await setUserCooldownR(
-                wrapper.webhookUserId,
-                userId,
-                automation.id,
-              );
-              if (isFollowConfirmFlow || isOpeningMessageFlow) {
-                await Promise.all([
-                  setAskResolvedR(wrapper.webhookUserId, userId, automation.id),
-                  clearPendingConfirmationR(
-                    wrapper.webhookUserId,
-                    userId,
-                    automation.id,
-                  ),
-                  setAccountSpamGuardR(wrapper.webhookUserId, 2),
-                ]).catch(() => {});
-              } else {
-                await setAccountSpamGuardR(wrapper.webhookUserId, 2).catch(
-                  () => {},
-                );
-              }
-            }
+        // 3. Public Reply ONLY if DM was delivered (and it is a COMMENT)
+        let replyRes: Result<any, any> = ok(null);
+        if (isDelivered && wrapper.event.type === "COMMENT") {
+          replyRes = await executePublicReply(
+            wrapper.event.event as any,
+            automation,
+            wrapper.accessToken,
+            wrapper.webhookUserId,
+          );
+        }
 
-            if (!replyRes.ok) {
-              logger.warn(
-                {
+        if (isDelivered) {
+          if (userId) {
+            await setUserCooldownR(
+              wrapper.webhookUserId,
+              userId,
+              automation.id,
+            );
+            if (isFollowConfirmFlow || isOpeningMessageFlow) {
+              await Promise.all([
+                setAskResolvedR(wrapper.webhookUserId, userId, automation.id),
+                clearPendingConfirmationR(
+                  wrapper.webhookUserId,
                   userId,
-                  automationId: automation.id,
-                  error: replyRes.error.message,
-                },
-                "Partial Success: DM delivered, but Public Reply failed.",
+                  automation.id,
+                ),
+                setAccountSpamGuardR(wrapper.webhookUserId, 2),
+              ]).catch(() => {});
+            } else {
+              await setAccountSpamGuardR(wrapper.webhookUserId, 2).catch(
+                () => {},
               );
             }
+          }
 
-            return {
-              automationId: automation.id,
-              clerkUserId: wrapper.clerkUserId,
-              userId: wrapper.userId,
-              webhookUserId: wrapper.webhookUserId,
-              eventId,
-              status: "SUCCESS",
-              actionType: automation.actionType,
-              commentData: wrapper.event.event,
-              sentMessage: dmRes.value.sentMessage,
-              instagramMessageId: dmRes.value.instagramMessageId,
-              errorMessage: !replyRes.ok ? replyRes.error.message : undefined,
-            } as ExecutionOutcome;
+          if (!replyRes.ok) {
+            logger.warn(
+              {
+                userId,
+                automationId: automation.id,
+                error: replyRes.error.message,
+              },
+              "Partial Success: DM delivered, but Public Reply failed.",
+            );
           }
 
           return {
@@ -403,11 +407,13 @@ async function runExecutionFlow(
             userId: wrapper.userId,
             webhookUserId: wrapper.webhookUserId,
             eventId,
-            status: "SKIPPED",
+            status: "SUCCESS",
             actionType: automation.actionType,
             commentData: wrapper.event.event,
             sentMessage: dmRes.value.sentMessage,
             instagramMessageId: dmRes.value.instagramMessageId,
+            errorMessage: !replyRes.ok ? replyRes.error.message : undefined,
+            dbReserved: wrapper.dbReserved,
           } as ExecutionOutcome;
         }
 
@@ -417,10 +423,12 @@ async function runExecutionFlow(
           userId: wrapper.userId,
           webhookUserId: wrapper.webhookUserId,
           eventId,
-          status: "FAILED",
-          errorMessage: dmRes.error.message,
+          status: "SKIPPED",
           actionType: automation.actionType,
           commentData: wrapper.event.event,
+          sentMessage: dmRes.value.sentMessage,
+          instagramMessageId: dmRes.value.instagramMessageId,
+          dbReserved: wrapper.dbReserved,
         } as ExecutionOutcome;
       } catch (err: any) {
         logger.error(
@@ -437,34 +445,36 @@ async function runExecutionFlow(
           errorMessage: err.message || "Unknown automation error",
           actionType: automation.actionType,
           commentData: wrapper.event.event,
+          dbReserved: wrapper.dbReserved,
         } as ExecutionOutcome;
       }
     }),
   );
 
   const automationOutcomes: ExecutionOutcome[] = [];
-  for (const res of automationResults) {
+  automationResults.forEach((res, index) => {
+    const automation = wrapper.safeAutomations[index];
     if (res.status === "fulfilled") {
-      automationOutcomes.push(res.value);
+      automationOutcomes.push(res.value as ExecutionOutcome);
     } else {
       logger.error(
-        { error: res.reason, eventId },
-        "Individual automation failed during multi-trigger flow. Recording as failure.",
+        { error: res.reason, eventId, automationId: automation.id },
+        "Individual automation implementation threw/rejected. Recording as failure.",
       );
-      // Construct a generic FAILED outcome for recording
       automationOutcomes.push({
-        automationId: "unknown",
+        automationId: automation.id,
         clerkUserId: wrapper.clerkUserId,
         userId: wrapper.userId,
         webhookUserId: wrapper.webhookUserId,
         eventId,
         status: "FAILED",
         errorMessage: String(res.reason || "Automation promise rejected"),
-        actionType: "DM", // Default/fallback
+        actionType: automation.actionType,
         commentData: wrapper.event.event,
+        dbReserved: wrapper.dbReserved,
       } as ExecutionOutcome);
     }
-  }
+  });
 
   return automationOutcomes;
 }

@@ -31,7 +31,7 @@ export async function executePublicReply(
       body: { message: pickedReply, access_token: accessToken },
       timeoutMs: 20000,
       retries: 2,
-      instagramUserId: instagramUserId,
+      webhookUserId: instagramUserId,
     });
 
     if (!result.ok) return fail(result.error);

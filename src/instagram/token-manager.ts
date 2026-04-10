@@ -26,7 +26,7 @@ export async function refreshAccessToken(
       method: "GET",
       timeoutMs: 15000,
       retries: 2,
-      instagramUserId: account.instagramUserId,
+      webhookUserId: account.webhookUserId || undefined,
     });
 
     if (!response.ok) throw response.error;
@@ -47,8 +47,19 @@ export async function refreshAccessToken(
   } catch (error: any) {
     // Only deactivate for confirmed auth revocation or invalid tokens (e.g. code 190)
     // Infrastructure errors (timeouts, 500s) should not deactivate the account
+    const errorCode =
+      error.code || error.error?.code || error.response?.error?.code;
+    const errorSubcode =
+      error.error_subcode ||
+      error.error?.error_subcode ||
+      error.response?.error?.error_subcode;
+
     const isAuthError =
       error instanceof InstagramTokenExpiredError ||
+      errorCode === 190 ||
+      errorSubcode === 463 || // Expired
+      errorSubcode === 467 || // Invalid
+      errorSubcode === 460 || // Password changed
       error.message?.toLowerCase().includes("oauth") ||
       error.message?.toLowerCase().includes("invalid token") ||
       error.message?.toLowerCase().includes("revoked");
@@ -77,16 +88,26 @@ export async function refreshAccessToken(
         });
 
       // Best-effort cache cleanup
-      try {
-        await invalidateUserCacheR(
-          account.user?.clerkId || "",
-          account.webhookUserId || "",
-          account.instagramUserId,
-        );
-      } catch (cacheError: any) {
-        logger.error(
-          { accountId, error: cacheError.message },
-          "Volatile cache cleanup failed during revocation handling",
+      const clerkId = account.user?.clerkId;
+      const webhookUserId = account.webhookUserId;
+
+      if (clerkId && webhookUserId) {
+        try {
+          await invalidateUserCacheR(
+            clerkId,
+            webhookUserId,
+            account.instagramUserId || undefined,
+          );
+        } catch (cacheError: any) {
+          logger.error(
+            { accountId, error: cacheError.message },
+            "Volatile cache cleanup failed during revocation handling",
+          );
+        }
+      } else {
+        logger.warn(
+          { accountId, clerkId, webhookUserId },
+          "Skipping cache invalidation during revocation: Missing mandatory identifiers.",
         );
       }
     } else {

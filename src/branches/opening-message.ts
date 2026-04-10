@@ -64,7 +64,7 @@ export async function executeOpeningMessage(
     },
     timeoutMs: 15000,
     retries: 0,
-    instagramUserId,
+    webhookUserId: instagramUserId,
   });
 
   if (!result.ok) return fail(result.error);

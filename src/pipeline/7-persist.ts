@@ -1,7 +1,10 @@
 import { ExecutionOutcome } from "../types";
 import { executeTransaction } from "../repositories/repository-utils";
 import { Result, ok, fail } from "../helpers/result";
-import { PersistenceError } from "../errors/pipeline.errors";
+import {
+  PersistenceError,
+  PipelineRetryableError,
+} from "../errors/pipeline.errors";
 import { getRedisClient } from "../redis/client";
 import { KEYS } from "../redis/keys";
 import { logger } from "../logger";
@@ -54,13 +57,25 @@ export async function persistOutcomes(
     return persistOutcomesSync(outcomes);
   }
 
-  // Now that outcomes are safely buffered, mark events as permanently handled
+  // Identify which events should NOT be marked handled because they have at least one retryable outcome
+  const retryableEventIds = new Set(
+    outcomes
+      .filter((o) => o.retryable)
+      .map((o) => `${o.webhookUserId}:${o.eventId}`),
+  );
+
+  // Now that outcomes are safely buffered, mark non-retryable events as permanently handled
   try {
     const uniqueEvents = Array.from(
       new Map(
-        outcomes.map((o) => [`${o.webhookUserId}:${o.eventId}`, o]),
+        outcomes
+          .filter(
+            (o) => !retryableEventIds.has(`${o.webhookUserId}:${o.eventId}`),
+          )
+          .map((o) => [`${o.webhookUserId}:${o.eventId}`, o]),
       ).values(),
     );
+
     await Promise.all(
       uniqueEvents.map((o) =>
         setEventHandledR(o.webhookUserId, o.eventId).catch((e) =>
@@ -79,6 +94,16 @@ export async function persistOutcomes(
     );
   }
 
+  // If any outcomes are retryable, throw to trigger BullMQ retry for the whole batch
+  const hasRetryable = outcomes.some((o) => o.retryable);
+  if (hasRetryable) {
+    throw new PipelineRetryableError(
+      "Persistence",
+      "Batch contains retryable outcomes. Triggering job retry.",
+      { retryableCount: outcomes.filter((o) => o.retryable).length },
+    );
+  }
+
   return ok(undefined);
 }
 
@@ -87,7 +112,7 @@ export async function persistOutcomes(
  */
 async function persistOutcomesSync(
   outcomes: ExecutionOutcome[],
-): Promise<Result<void, PersistenceError>> {
+): Promise<Result<void, PersistenceError | PipelineRetryableError>> {
   let hasFailure = false;
   let lastError: any = null;
 
@@ -192,8 +217,8 @@ async function persistOutcomesSync(
         },
       );
 
-      // POST-COMMIT: Update Redis state if available
-      if (outcome.eventId) {
+      // POST-COMMIT: Update Redis state if available, but only if not retryable
+      if (outcome.eventId && !outcome.retryable) {
         await setEventHandledR(outcome.webhookUserId, outcome.eventId).catch(
           () => {},
         );
@@ -217,6 +242,17 @@ async function persistOutcomesSync(
       new PersistenceError(
         `Failed to persist ${outcomes.length} outcomes in sync fallback.`,
         lastError,
+      ),
+    );
+  }
+
+  const hasRetryable = outcomes.some((o) => o.retryable);
+  if (hasRetryable) {
+    return fail(
+      new PipelineRetryableError(
+        "PersistenceSync",
+        "Batch contains retryable outcomes in sync fallback. Triggering job retry.",
+        { retryableCount: outcomes.filter((o) => o.retryable).length },
       ),
     );
   }

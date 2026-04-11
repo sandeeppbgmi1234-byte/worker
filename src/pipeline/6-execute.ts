@@ -1,9 +1,13 @@
 import { ExecutionOutcome, GuardedEvent } from "../types";
-import { ExecutionError } from "../errors/pipeline.errors";
+import {
+  ExecutionError,
+  PipelineError,
+  PipelineRetryableError,
+} from "../errors/pipeline.errors";
 import { executeDmDelivery } from "../branches/dm-delivery";
 import { executeAskToFollow } from "../branches/ask-to-follow";
 import { executeOpeningMessage } from "../branches/opening-message";
-import { Result, ok } from "../helpers/result";
+import { Result, ok, fail } from "../helpers/result";
 import {
   clearAskResolvedR,
   setPendingConfirmationR,
@@ -70,24 +74,12 @@ export async function executeEvents(
             if (acquired !== "OK") {
               logger.info(
                 { userId, accountId: wrapper.accountId, eventId },
-                "Execution lock held by another thread. Flagging for retry.",
+                "Execution lock held by another thread. Rethrowing for retry.",
               );
-              // Convert lock-acquisition rejection into a retryable outcome
-              return wrapper.safeAutomations.map(
-                (auto) =>
-                  ({
-                    automationId: auto.id,
-                    clerkUserId: wrapper.clerkUserId,
-                    userId: wrapper.userId,
-                    webhookUserId: wrapper.webhookUserId,
-                    eventId,
-                    status: "FAILED",
-                    errorMessage: `Lock contention: Execution lock held for user ${userId}`,
-                    retryable: true,
-                    actionType: auto.actionType,
-                    commentData: wrapper.event.event,
-                    dbReserved: wrapper.dbReserved,
-                  }) as ExecutionOutcome,
+              throw new PipelineRetryableError(
+                "ExecutionLockAcquisition",
+                `Lock contention: Execution lock held for user ${userId}`,
+                { userId, accountId: wrapper.accountId, eventId },
               );
             }
             try {
@@ -126,23 +118,9 @@ export async function executeEvents(
       } catch (err: any) {
         logger.error(
           { eventId, userId, error: err.message },
-          "Unexpected error in executeEvents wrapper",
+          "Unexpected error in executeEvents wrapper. Rethrowing for pipeline retry.",
         );
-        return wrapper.safeAutomations.map(
-          (auto) =>
-            ({
-              automationId: auto.id,
-              clerkUserId: wrapper.clerkUserId,
-              userId: wrapper.userId,
-              webhookUserId: wrapper.webhookUserId,
-              eventId,
-              status: "FAILED",
-              errorMessage: err.message || "Unknown execution error",
-              actionType: auto.actionType,
-              commentData: wrapper.event.event,
-              dbReserved: wrapper.dbReserved,
-            }) as ExecutionOutcome,
-        );
+        throw err;
       }
     }),
   );
@@ -158,15 +136,22 @@ export async function executeEvents(
     }
   }
 
-  if (flatOutcomes.length > 0 || errors.length > 0) {
-    if (errors.length > 0 && flatOutcomes.length > 0) {
-      logger.warn(
-        { errorCount: errors.length },
-        "Partial batch failure in execution stage. Propagating successes and failed outcomes.",
-      );
-    }
-    // Note: Errors are now mostly converted to FAILED outcomes by the wrapper's try/catch
-    return ok(flatOutcomes);
+  if (errors.length > 0) {
+    logger.error(
+      { errorCount: errors.length },
+      "Batch execution failed with errors. Failing stage to trigger pipeline retry.",
+    );
+    // Return the first error or a combined error
+    return fail(
+      errors[0] instanceof PipelineError
+        ? errors[0]
+        : new ExecutionError(
+            "Execution",
+            "Multi-event execution failure",
+            { errorCount: errors.length },
+            errors[0],
+          ),
+    );
   }
 
   return ok(flatOutcomes);

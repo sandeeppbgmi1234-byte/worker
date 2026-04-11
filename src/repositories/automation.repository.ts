@@ -101,14 +101,30 @@ export async function pauseAutomation(
 ): Promise<Result<Automation, DatabaseError>> {
   return executeWithErrorHandling(
     async () => {
-      const result = await prisma.automation.update({
+      const { count } = await prisma.automation.updateMany({
         where: {
           id: automationId,
           instaAccountId,
         },
         data: { status: "PAUSED" },
       });
-      return result;
+
+      if (count === 0) {
+        throw new Error(
+          `Automation ${automationId} not found for account ${instaAccountId}`,
+        );
+      }
+
+      // Re-fetch to return the updated record as expected by the result type
+      const updated = await prisma.automation.findUnique({
+        where: { id: automationId },
+      });
+
+      if (!updated) {
+        throw new Error(`Automation ${automationId} vanished after update`);
+      }
+
+      return updated;
     },
     {
       operation: "pauseAutomation",

@@ -4,8 +4,11 @@ import { logger } from "../../logger";
 import { RATE_LIMIT_THRESHOLDS } from "../../config/instagram.config";
 import { InstagramRateLimitError } from "../../errors/instagram.errors";
 
+/**
+ * Updates Meta API rate limits from response headers.
+ */
 export async function updateRateLimitsFromHeadersR(
-  instagramUserId: string,
+  webhookUserId: string,
   appUsage: Record<string, any> | null,
   businessUsage: Record<string, any> | null,
   adAccountUsage?: Record<string, any> | null,
@@ -22,91 +25,100 @@ export async function updateRateLimitsFromHeadersR(
         appUsage.call_count || 0,
         appUsage.total_time || 0,
         appUsage.total_cputime || 0,
+        appUsage.call_volume || 0,
+        appUsage.cpu_time || 0,
       );
       if (usage > 0) {
-        pipeline.set(KEYS.APP_USAGE(), usage, "EX", TTL.API_USAGE);
+        pipeline.set(KEYS.APP_USAGE(), usage.toString(), "EX", TTL.API_USAGE);
       }
     }
 
-    // 2. Business Usage
+    let maxAccountUsage = 0;
+
+    // 2. Business Usage (Account-Level)
     if (businessUsage) {
-      let maxAccountUsage = 0;
       for (const key of Object.keys(businessUsage)) {
         const metrics = businessUsage[key];
-        if (Array.isArray(metrics) && metrics.length > 0) {
-          const m = metrics[0];
+        const m = Array.isArray(metrics) ? metrics[0] : metrics;
+        if (m) {
           const usage = Math.max(
             m.call_count || 0,
             m.total_time || 0,
             m.total_cputime || 0,
+            m.call_volume || 0,
+            m.cpu_time || 0,
           );
           if (usage > maxAccountUsage) maxAccountUsage = usage;
         }
       }
-      if (maxAccountUsage > 0)
-        pipeline.set(
-          KEYS.ACCOUNT_USAGE(instagramUserId),
-          maxAccountUsage,
-          "EX",
-          TTL.API_USAGE,
-        );
     }
 
-    // 3. Ad Account Usage
+    // 3. Ad Account Usage (Fallback)
     if (adAccountUsage && adAccountUsage.acc_id_util_pct) {
       const usage = Math.round(adAccountUsage.acc_id_util_pct);
+      if (usage > maxAccountUsage) maxAccountUsage = usage;
+    }
+
+    if (maxAccountUsage > 0) {
       pipeline.set(
-        KEYS.ACCOUNT_USAGE(instagramUserId),
-        usage,
+        KEYS.ACCOUNT_USAGE(webhookUserId),
+        maxAccountUsage.toString(),
         "EX",
         TTL.API_USAGE,
       );
     }
 
     await pipeline.exec();
-  } catch (error: any) {}
+  } catch (error: any) {
+    logger.debug(
+      { error: error.message },
+      "Failed to update rate limit headers in Redis",
+    );
+  }
 }
 
-export async function checkRateLimits(instagramUserId: string): Promise<void> {
+/**
+ * Checks if current usage is below safety thresholds.
+ */
+export async function checkRateLimits(webhookUserId: string): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
   const [appUsageStr, accountUsageStr] = await redis.mget(
     KEYS.APP_USAGE(),
-    KEYS.ACCOUNT_USAGE(instagramUserId),
+    KEYS.ACCOUNT_USAGE(webhookUserId),
   );
   const appUsage = appUsageStr ? parseInt(appUsageStr, 10) : 0;
   const accountUsage = accountUsageStr ? parseInt(accountUsageStr, 10) : 0;
 
-  if (appUsage >= RATE_LIMIT_THRESHOLDS.APP_USAGE_STOP_PERCENT) {
+  if (appUsage >= RATE_LIMIT_THRESHOLDS.PANIC_THRESHOLD) {
     throw new InstagramRateLimitError(
       "checkRateLimits",
-      `App-Level Rate Limit at ${appUsage}%`,
+      `App-Level Panic Threshold at ${appUsage}%`,
       true,
     );
   }
 
-  if (accountUsage >= RATE_LIMIT_THRESHOLDS.ACCOUNT_USAGE_STOP_PERCENT) {
+  if (accountUsage >= RATE_LIMIT_THRESHOLDS.PANIC_THRESHOLD) {
     throw new InstagramRateLimitError(
       "checkRateLimits",
-      `Account-Level Rate Limit at ${accountUsage}%`,
+      `Account-Level Panic Threshold at ${accountUsage}%`,
       false,
     );
   }
 }
 
-export async function incrementApiUsage(
-  instagramUserId: string,
-  count: number = 1,
-): Promise<void> {
+/**
+ * Returns the current global app-level usage percentage.
+ */
+export async function getGlobalAppUsageR(): Promise<number> {
   const redis = getRedisClient();
-  if (!redis) return;
-
-  const key = KEYS.PREDICTED_USAGE(instagramUserId);
+  if (!redis) return 0;
   try {
-    const pipeline = redis.pipeline();
-    pipeline.incrby(key, count);
-    pipeline.expire(key, TTL.API_USAGE);
-    await pipeline.exec();
-  } catch (error: any) {}
+    const usage = await redis.get(KEYS.APP_USAGE());
+    return usage ? parseInt(usage, 10) : 0;
+  } catch (error: any) {
+    logger.warn({ error: error.message }, "getGlobalAppUsageR failed");
+    return 0;
+  }
 }

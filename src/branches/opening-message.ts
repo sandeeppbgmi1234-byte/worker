@@ -1,7 +1,4 @@
-import {
-  checkRateLimits,
-  incrementApiUsage,
-} from "../redis/operations/rate-limit";
+import { checkRateLimits } from "../redis/operations/rate-limit";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
@@ -23,7 +20,6 @@ export async function executeOpeningMessage(
 ): Promise<Result<"SENT", BaseError>> {
   try {
     await checkRateLimits(instagramUserId);
-    await incrementApiUsage(instagramUserId, 1);
   } catch (error: any) {
     if (error instanceof BaseError) return fail(error);
     return fail(
@@ -68,7 +64,7 @@ export async function executeOpeningMessage(
     },
     timeoutMs: 15000,
     retries: 0,
-    instagramUserId,
+    webhookUserId: instagramUserId,
   });
 
   if (!result.ok) return fail(result.error);

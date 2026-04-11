@@ -1,12 +1,5 @@
-import { QUICK_REPLIES } from "../config/instagram.config";
-import {
-  isFollowWarningSentR,
-  setFollowWarningSentR,
-} from "../redis/operations/cooldown";
-import {
-  checkRateLimits,
-  incrementApiUsage,
-} from "../redis/operations/rate-limit";
+import { QUICK_REPLIES, MESSAGING_DEFAULTS } from "../config/instagram.config";
+import { checkRateLimits, acquireFollowWarningFlagR } from "../redis";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
@@ -25,13 +18,12 @@ export async function executeAskToFollow(
   event: AskToFollowEvent,
   automation: any,
   accessToken: string,
-  instagramUserId: string,
+  webhookUserId: string,
   instagramUsername: string,
 ): Promise<Result<"PROCEED" | "HALT" | "NEEDS_OPENING_MESSAGE", BaseError>> {
   if (!automation.askToFollowEnabled) return ok("PROCEED");
 
-  await checkRateLimits(instagramUserId);
-  await incrementApiUsage(instagramUserId, 1);
+  await checkRateLimits(webhookUserId);
 
   // If this is a follow confirmation click, give Meta a moment to update status
   const isConfirmation = event.text === QUICK_REPLIES.FOLLOW_CONFIRM.TITLE;
@@ -48,7 +40,7 @@ export async function executeAskToFollow(
 
   const followerRes = await fetchFromInstagram<any>(url.toString(), {
     method: "GET",
-    instagramUserId,
+    webhookUserId: webhookUserId,
   });
 
   if (!followerRes.ok) {
@@ -64,22 +56,21 @@ export async function executeAskToFollow(
     const recipient = event.id
       ? { comment_id: event.id }
       : { id: commenterId! };
-    const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
+    const msgUrl = buildGraphApiUrl(`${webhookUserId}/messages`);
 
     // Case 1: They clicked "I am Following" but are still not following
     if (isConfirmation) {
-      const alreadyWarned = await isFollowWarningSentR(
+      const acquired = await acquireFollowWarningFlagR(
+        webhookUserId,
         commenterId!,
         automation.id,
-        originEventId,
       );
-      if (alreadyWarned) return ok("HALT");
+      if (!acquired) return ok("HALT");
 
-      await checkRateLimits(instagramUserId);
-      await incrementApiUsage(instagramUserId, 1);
+      await checkRateLimits(webhookUserId);
 
       const reminderText =
-        "Please follow to access the link 🔔. This reminder will appear only 1 time ⏳. Once you have followed, click ‘I am Following’ above to continue ✅";
+        automation.askToFollowReminder || MESSAGING_DEFAULTS.FOLLOW_REMINDER;
 
       const res = await fetchFromInstagram<any>(msgUrl.toString(), {
         method: "POST",
@@ -89,12 +80,11 @@ export async function executeAskToFollow(
           messaging_type: "RESPONSE" as const,
           access_token: accessToken,
         },
-        instagramUserId,
+        webhookUserId: webhookUserId,
       });
 
-      if (res.ok) {
-        await setFollowWarningSentR(commenterId!, automation.id, originEventId);
-      }
+      if (!res.ok) return fail(res.error);
+
       return ok("HALT");
     }
 
@@ -103,8 +93,7 @@ export async function executeAskToFollow(
       automation.askToFollowLink ||
       `https://www.instagram.com/${instagramUsername}`;
 
-    await checkRateLimits(instagramUserId);
-    await incrementApiUsage(instagramUserId, 1);
+    await checkRateLimits(webhookUserId);
 
     const templateAttachment = buildAskToFollowTemplate(
       {
@@ -125,7 +114,7 @@ export async function executeAskToFollow(
       },
       timeoutMs: 15000,
       retries: 0,
-      instagramUserId,
+      webhookUserId: webhookUserId,
     });
 
     if (!result.ok) return fail(result.error);

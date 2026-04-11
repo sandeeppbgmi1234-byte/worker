@@ -1,19 +1,25 @@
 import { ExecutionOutcome, GuardedEvent } from "../types";
-import { ExecutionError } from "../errors/pipeline.errors";
+import {
+  ExecutionError,
+  PipelineError,
+  PipelineRetryableError,
+} from "../errors/pipeline.errors";
 import { executeDmDelivery } from "../branches/dm-delivery";
 import { executeAskToFollow } from "../branches/ask-to-follow";
 import { executeOpeningMessage } from "../branches/opening-message";
-import { Result, ok } from "../helpers/result";
+import { Result, ok, fail } from "../helpers/result";
 import {
   clearAskResolvedR,
   setPendingConfirmationR,
   clearPendingConfirmationR,
   setUserCooldownR,
   setAskResolvedR,
+  setAccountSpamGuardR,
 } from "../redis/operations/cooldown";
 import { QUICK_REPLIES } from "../config/instagram.config";
 import { logger } from "../logger";
 import { getRedisClient } from "../redis/client";
+import { KEYS, TTL } from "../redis/keys";
 import { executePublicReply } from "../branches/public-reply";
 
 /**
@@ -51,61 +57,71 @@ export async function executeEvents(
         QUICK_REPLIES.OPENING_MESSAGE.PAYLOAD_PREFIX,
       );
 
-      // --- CRITICAL-2: ACQUIRE PER-USER-PER-ACCOUNT EXECUTION LOCK (30s) ---
-      // This prevents "Shadow Replica" jobs from sending duplicate DMs if the process stalls.
-      // Scoped by both account and user to ensure absolute siloed isolation.
-      if (userId) {
-        const lockKey = `lock:execute:account:${wrapper.accountId}:user:${userId}`;
-        const redis = getRedisClient();
-        if (redis) {
-          const lockToken = Math.random().toString(36).substring(2, 15);
-          const acquired = await redis.set(lockKey, lockToken, "EX", 30, "NX");
-          if (acquired !== "OK") {
-            logger.info(
-              { userId, accountId: wrapper.accountId, eventId },
-              "Execution lock held by another thread. Flagging for retry.",
+      try {
+        // --- CRITICAL-2: ACQUIRE PER-USER-PER-ACCOUNT EXECUTION LOCK (30s) ---
+        if (userId) {
+          const lockKey = KEYS.EXECUTION_LOCK(wrapper.accountId, userId);
+          const redis = getRedisClient();
+          if (redis) {
+            const lockToken = Math.random().toString(36).substring(2, 15);
+            const acquired = await redis.set(
+              lockKey,
+              lockToken,
+              "EX",
+              30,
+              "NX",
             );
-            // We throw here so allSettled catches it as a rejection for this specific event
-            throw new ExecutionError(
-              "executeEvents",
-              `Execution lock held for user ${userId} on account ${wrapper.accountId}`,
-              { userId, accountId: wrapper.accountId, eventId },
-            );
-          }
-          try {
-            return await runExecutionFlow(
-              wrapper,
-              eventId,
-              userId,
-              isFollowConfirmFlow,
-              isOpeningMessageFlow,
-            );
-          } finally {
-            // RELEASE LOCK ATOMICALLY (Only if we still own it)
+            if (acquired !== "OK") {
+              logger.info(
+                { userId, accountId: wrapper.accountId, eventId },
+                "Execution lock held by another thread. Rethrowing for retry.",
+              );
+              throw new PipelineRetryableError(
+                "ExecutionLockAcquisition",
+                `Lock contention: Execution lock held for user ${userId}`,
+                { userId, accountId: wrapper.accountId, eventId },
+              );
+            }
             try {
-              await redis.eval(
-                "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-                1,
-                lockKey,
-                lockToken,
+              return await runExecutionFlow(
+                wrapper,
+                eventId,
+                userId,
+                isFollowConfirmFlow,
+                isOpeningMessageFlow,
               );
-            } catch (err) {
-              logger.debug(
-                { lockKey, error: err },
-                "Failed to release lock cleanly",
-              );
+            } finally {
+              try {
+                await redis.eval(
+                  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                  1,
+                  lockKey,
+                  lockToken,
+                );
+              } catch (err) {
+                logger.debug(
+                  { lockKey, error: err },
+                  "Failed to release lock cleanly",
+                );
+              }
             }
           }
         }
-      }
 
-      return runExecutionFlow(
-        wrapper,
-        eventId,
-        userId,
-        isFollowConfirmFlow,
-        isOpeningMessageFlow,
-      );
+        return await runExecutionFlow(
+          wrapper,
+          eventId,
+          userId,
+          isFollowConfirmFlow,
+          isOpeningMessageFlow,
+        );
+      } catch (err: any) {
+        logger.error(
+          { eventId, userId, error: err.message },
+          "Unexpected error in executeEvents wrapper. Rethrowing for pipeline retry.",
+        );
+        throw err;
+      }
     }),
   );
 
@@ -120,25 +136,22 @@ export async function executeEvents(
     }
   }
 
-  // ATOMIC RECONCILIATION: If we have outcomes (some successful DMs were sent),
-  // we MUST return them to persist stage first, even if others failed.
-  if (flatOutcomes.length > 0) {
-    // If there were also errors, we log them but still return the successes
-    if (errors.length > 0) {
-      logger.warn(
-        { errorCount: errors.length },
-        "Partial batch failure in execution stage. Propagating successes first.",
-      );
-    }
-    return ok(flatOutcomes);
-  }
-
-  // If everything failed, then throw the first error to trigger BullMQ retry
   if (errors.length > 0) {
-    return ok([]); // Still return empty array so persist stage doesn't crash?
-    // Actually, if everything failed, BullMQ should retry.
-    // Let's rethrow the first error.
-    throw errors[0];
+    logger.error(
+      { errorCount: errors.length },
+      "Batch execution failed with errors. Failing stage to trigger pipeline retry.",
+    );
+    // Return the first error or a combined error
+    return fail(
+      errors[0] instanceof PipelineError
+        ? errors[0]
+        : new ExecutionError(
+            "Execution",
+            "Multi-event execution failure",
+            { errorCount: errors.length },
+            errors[0],
+          ),
+    );
   }
 
   return ok(flatOutcomes);
@@ -154,113 +167,85 @@ async function runExecutionFlow(
   isFollowConfirmFlow: boolean,
   isOpeningMessageFlow: boolean,
 ): Promise<ExecutionOutcome[]> {
-  // Perform execution for each automation in parallel
   const automationResults = await Promise.allSettled(
     wrapper.safeAutomations.map(async (automation) => {
-      // 0. SELF-HEALING: Clean slate for new threads
-      if (
-        (wrapper.event.type === "COMMENT" ||
-          wrapper.event.type === "STORY_REPLY" ||
-          wrapper.event.type === "DM_MESSAGE") &&
-        userId
-      ) {
-        await Promise.all([
-          clearAskResolvedR(userId, automation.id),
-          clearPendingConfirmationR(userId, automation.id),
-        ]).catch((err) => {
-          logger.debug(
-            { userId, automationId: automation.id, error: err.message },
-            "Self-healing: Failed to clear old states, but proceeding",
-          );
-        });
-      }
-
-      // 1. Ask-to-follow gate
-      const askToFollowEvent = {
-        ...(wrapper.event.event as any),
-        originEventId: (wrapper.event as any).originEventId || eventId,
-      };
-
-      const askRes = await executeAskToFollow(
-        askToFollowEvent,
-        automation,
-        wrapper.accessToken,
-        wrapper.event.instagramUserId,
-        wrapper.instagramUsername,
-      );
-
-      const resolvedAskRes =
-        isOpeningMessageFlow &&
-        askRes.ok &&
-        askRes.value === "NEEDS_OPENING_MESSAGE"
-          ? ok("PROCEED" as const)
-          : askRes;
-
-      if (!resolvedAskRes.ok) {
-        return {
-          automationId: automation.id,
-          clerkUserId: wrapper.clerkUserId,
-          userId: wrapper.userId,
-          eventId,
-          status: "FAILED",
-          errorMessage: resolvedAskRes.error.message,
-          actionType: automation.actionType,
-          commentData: wrapper.event.event,
-        } as ExecutionOutcome;
-      }
-
-      if (resolvedAskRes.value === "HALT") {
-        if (userId) await setPendingConfirmationR(userId, automation.id);
-
-        if (wrapper.event.type === "COMMENT") {
-          await executePublicReply(
-            wrapper.event.event as any,
-            automation,
-            wrapper.accessToken,
-            wrapper.event.instagramUserId,
-          ).catch((err) => {
-            logger.warn(
-              { error: err.message, automationId: automation.id },
-              "Failed to send public reply during follow gate",
+      try {
+        // 0. SELF-HEALING: Clean slate for new threads
+        if (
+          (wrapper.event.type === "COMMENT" ||
+            wrapper.event.type === "STORY_REPLY" ||
+            wrapper.event.type === "DM_MESSAGE") &&
+          userId
+        ) {
+          await Promise.all([
+            clearAskResolvedR(wrapper.webhookUserId, userId, automation.id),
+            clearPendingConfirmationR(
+              wrapper.webhookUserId,
+              userId,
+              automation.id,
+            ),
+          ]).catch((err) => {
+            logger.debug(
+              { userId, automationId: automation.id, error: err.message },
+              "Self-healing: Failed to clear old states, but proceeding",
             );
           });
         }
 
-        return {
-          automationId: automation.id,
-          clerkUserId: wrapper.clerkUserId,
-          userId: wrapper.userId,
-          eventId,
-          status: "ASK_TO_FOLLOW_SENT",
-          actionType: automation.actionType,
-          commentData: wrapper.event.event,
-        } as ExecutionOutcome;
-      }
+        // 1. Ask-to-follow gate
+        const askToFollowEvent = {
+          ...(wrapper.event.event as any),
+          originEventId: (wrapper.event as any).originEventId || eventId,
+        };
 
-      if (resolvedAskRes.value === "NEEDS_OPENING_MESSAGE") {
-        if (wrapper.event.type === "STORY_REPLY") {
-          // Bypass
-        } else {
-          const openRes = await executeOpeningMessage(
-            wrapper.event.event as any,
-            automation,
-            wrapper.accessToken,
-            wrapper.event.instagramUserId,
-          );
+        const askRes = await executeAskToFollow(
+          askToFollowEvent,
+          automation,
+          wrapper.accessToken,
+          wrapper.webhookUserId,
+          wrapper.instagramUsername,
+        );
 
-          if (openRes.ok && userId)
-            await setPendingConfirmationR(userId, automation.id);
+        const resolvedAskRes =
+          isOpeningMessageFlow &&
+          askRes.ok &&
+          askRes.value === "NEEDS_OPENING_MESSAGE"
+            ? ok("PROCEED" as const)
+            : askRes;
+
+        if (!resolvedAskRes.ok) {
+          return {
+            automationId: automation.id,
+            clerkUserId: wrapper.clerkUserId,
+            userId: wrapper.userId,
+            webhookUserId: wrapper.webhookUserId,
+            eventId,
+            status: "FAILED",
+            errorMessage: resolvedAskRes.error.message,
+            actionType: automation.actionType,
+            commentData: wrapper.event.event,
+            dbReserved: wrapper.dbReserved,
+          } as ExecutionOutcome;
+        }
+
+        if (resolvedAskRes.value === "HALT") {
+          if (userId)
+            await setPendingConfirmationR(
+              wrapper.webhookUserId,
+              userId,
+              automation.id,
+            );
 
           if (wrapper.event.type === "COMMENT") {
             await executePublicReply(
               wrapper.event.event as any,
               automation,
               wrapper.accessToken,
-              wrapper.event.instagramUserId,
+              wrapper.webhookUserId,
             ).catch((err) => {
               logger.warn(
                 { error: err.message, automationId: automation.id },
-                "Failed to send public reply during opening message gate",
+                "Failed to send public reply during follow gate",
               );
             });
           }
@@ -269,48 +254,124 @@ async function runExecutionFlow(
             automationId: automation.id,
             clerkUserId: wrapper.clerkUserId,
             userId: wrapper.userId,
+            webhookUserId: wrapper.webhookUserId,
             eventId,
-            status: openRes.ok ? "OPENING_MESSAGE_SENT" : "FAILED",
-            errorMessage: openRes.ok ? undefined : openRes.error.message,
+            status: "ASK_TO_FOLLOW_SENT",
             actionType: automation.actionType,
             commentData: wrapper.event.event,
+            dbReserved: wrapper.dbReserved,
           } as ExecutionOutcome;
         }
-      }
 
-      // 2. Public Reply & DM Delivery in Parallel
-      const replyPromise =
-        wrapper.event.type === "COMMENT"
-          ? executePublicReply(
+        if (resolvedAskRes.value === "NEEDS_OPENING_MESSAGE") {
+          if (wrapper.event.type === "STORY_REPLY") {
+            // Bypass
+          } else {
+            const openRes = await executeOpeningMessage(
               wrapper.event.event as any,
               automation,
               wrapper.accessToken,
-              wrapper.event.instagramUserId,
-            )
-          : Promise.resolve(ok(null));
+              wrapper.webhookUserId,
+            );
 
-      const dmPromise = executeDmDelivery(
-        wrapper.event.event as any,
-        automation,
-        wrapper.accessToken,
-        wrapper.event.instagramUserId,
-      );
+            if (openRes.ok && userId) {
+              await Promise.all([
+                setPendingConfirmationR(
+                  wrapper.webhookUserId,
+                  userId,
+                  automation.id,
+                ),
+                setAccountSpamGuardR(wrapper.webhookUserId, 2),
+              ]).catch(() => {});
+            }
 
-      const [replyRes, dmRes] = await Promise.all([replyPromise, dmPromise]);
+            if (wrapper.event.type === "COMMENT") {
+              await executePublicReply(
+                wrapper.event.event as any,
+                automation,
+                wrapper.accessToken,
+                wrapper.webhookUserId,
+              ).catch((err) => {
+                logger.warn(
+                  { error: err.message, automationId: automation.id },
+                  "Failed to send public reply during opening message gate",
+                );
+              });
+            }
 
-      // PARTIAL SUCCESS RESILIENCE: Prioritize DM Delivery outcome for Cooldown & State tracking
-      if (dmRes.ok) {
+            return {
+              automationId: automation.id,
+              clerkUserId: wrapper.clerkUserId,
+              userId: wrapper.userId,
+              webhookUserId: wrapper.webhookUserId,
+              eventId,
+              status: openRes.ok ? "OPENING_MESSAGE_SENT" : "FAILED",
+              errorMessage: openRes.ok ? undefined : openRes.error.message,
+              actionType: automation.actionType,
+              commentData: wrapper.event.event,
+              dbReserved: wrapper.dbReserved,
+            } as ExecutionOutcome;
+          }
+        }
+
+        // 2. DM Delivery FIRST
+        const dmRes = await executeDmDelivery(
+          wrapper.event.event as any,
+          automation,
+          wrapper.accessToken,
+          wrapper.webhookUserId,
+        );
+
+        if (!dmRes.ok) {
+          return {
+            automationId: automation.id,
+            clerkUserId: wrapper.clerkUserId,
+            userId: wrapper.userId,
+            webhookUserId: wrapper.webhookUserId,
+            eventId,
+            status: "FAILED",
+            errorMessage: dmRes.error.message,
+            actionType: automation.actionType,
+            commentData: wrapper.event.event,
+            dbReserved: wrapper.dbReserved,
+          } as ExecutionOutcome;
+        }
+
         const isDelivered =
           dmRes.value.sentMessage || dmRes.value.instagramMessageId;
 
+        // 3. Public Reply ONLY if DM was delivered (and it is a COMMENT)
+        let replyRes: Result<any, any> = ok(null);
+        if (isDelivered && wrapper.event.type === "COMMENT") {
+          replyRes = await executePublicReply(
+            wrapper.event.event as any,
+            automation,
+            wrapper.accessToken,
+            wrapper.webhookUserId,
+          );
+        }
+
         if (isDelivered) {
           if (userId) {
-            await setUserCooldownR(userId, automation.id);
+            await setUserCooldownR(
+              wrapper.webhookUserId,
+              userId,
+              automation.id,
+            );
             if (isFollowConfirmFlow || isOpeningMessageFlow) {
               await Promise.all([
-                setAskResolvedR(userId, automation.id),
-                clearPendingConfirmationR(userId, automation.id),
+                setAskResolvedR(wrapper.webhookUserId, userId, automation.id),
+                clearPendingConfirmationR(
+                  wrapper.webhookUserId,
+                  userId,
+                  automation.id,
+                ),
+                setAccountSpamGuardR(wrapper.webhookUserId, 2),
               ]).catch(() => {});
+            } else {
+              await setAccountSpamGuardR(wrapper.webhookUserId, 2).catch(
+                () => {},
+              );
             }
           }
 
@@ -329,6 +390,7 @@ async function runExecutionFlow(
             automationId: automation.id,
             clerkUserId: wrapper.clerkUserId,
             userId: wrapper.userId,
+            webhookUserId: wrapper.webhookUserId,
             eventId,
             status: "SUCCESS",
             actionType: automation.actionType,
@@ -336,6 +398,7 @@ async function runExecutionFlow(
             sentMessage: dmRes.value.sentMessage,
             instagramMessageId: dmRes.value.instagramMessageId,
             errorMessage: !replyRes.ok ? replyRes.error.message : undefined,
+            dbReserved: wrapper.dbReserved,
           } as ExecutionOutcome;
         }
 
@@ -343,40 +406,60 @@ async function runExecutionFlow(
           automationId: automation.id,
           clerkUserId: wrapper.clerkUserId,
           userId: wrapper.userId,
+          webhookUserId: wrapper.webhookUserId,
           eventId,
           status: "SKIPPED",
           actionType: automation.actionType,
           commentData: wrapper.event.event,
           sentMessage: dmRes.value.sentMessage,
           instagramMessageId: dmRes.value.instagramMessageId,
+          dbReserved: wrapper.dbReserved,
+        } as ExecutionOutcome;
+      } catch (err: any) {
+        logger.error(
+          { automationId: automation.id, eventId, error: err.message },
+          "Unexpected error in runExecutionFlow automation loop",
+        );
+        return {
+          automationId: automation.id,
+          clerkUserId: wrapper.clerkUserId,
+          userId: wrapper.userId,
+          webhookUserId: wrapper.webhookUserId,
+          eventId,
+          status: "FAILED",
+          errorMessage: err.message || "Unknown automation error",
+          actionType: automation.actionType,
+          commentData: wrapper.event.event,
+          dbReserved: wrapper.dbReserved,
         } as ExecutionOutcome;
       }
-
-      // If DM Delivery failed, we report the error (regardless of replyRes)
-      return {
-        automationId: automation.id,
-        clerkUserId: wrapper.clerkUserId,
-        userId: wrapper.userId,
-        eventId,
-        status: "FAILED",
-        errorMessage: dmRes.error.message,
-        actionType: automation.actionType,
-        commentData: wrapper.event.event,
-      } as ExecutionOutcome;
     }),
   );
 
   const automationOutcomes: ExecutionOutcome[] = [];
-  for (const res of automationResults) {
+  automationResults.forEach((res, index) => {
+    const automation = wrapper.safeAutomations[index];
     if (res.status === "fulfilled") {
-      automationOutcomes.push(res.value);
+      automationOutcomes.push(res.value as ExecutionOutcome);
     } else {
       logger.error(
-        { error: res.reason },
-        "Individual automation failed during multi-trigger flow.",
+        { error: res.reason, eventId, automationId: automation.id },
+        "Individual automation implementation threw/rejected. Recording as failure.",
       );
+      automationOutcomes.push({
+        automationId: automation.id,
+        clerkUserId: wrapper.clerkUserId,
+        userId: wrapper.userId,
+        webhookUserId: wrapper.webhookUserId,
+        eventId,
+        status: "FAILED",
+        errorMessage: String(res.reason || "Automation promise rejected"),
+        actionType: automation.actionType,
+        commentData: wrapper.event.event,
+        dbReserved: wrapper.dbReserved,
+      } as ExecutionOutcome);
     }
-  }
+  });
 
   return automationOutcomes;
 }

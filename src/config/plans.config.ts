@@ -16,5 +16,6 @@ export const PLAN_CREDIT_LIMITS: Record<string, number> = {
  */
 export function getCreditLimitForPlan(plan?: string | null): number {
   if (!plan) return PLAN_CREDIT_LIMITS.FREE;
-  return PLAN_CREDIT_LIMITS[plan] ?? PLAN_CREDIT_LIMITS.FREE;
+  const normalizedPlan = plan.trim().toUpperCase();
+  return PLAN_CREDIT_LIMITS[normalizedPlan] ?? PLAN_CREDIT_LIMITS.FREE;
 }

@@ -11,11 +11,27 @@ import {
   findActiveAutomationsByStory,
   findActiveAutomationsForAccountDM,
   findAutomationById,
+  pauseAutomation,
 } from "../repositories/automation.repository";
 import { RefinedEvent, FilteredEvent } from "../types";
 import { Automation } from "@prisma/client";
-import { Result, ok } from "../helpers/result";
-import { FilterError } from "../errors/pipeline.errors";
+import { Result, ok, fail } from "../helpers/result";
+import { FilterError, PipelineRetryableError } from "../errors/pipeline.errors";
+import { logger } from "../logger";
+import { addNotificationJob } from "../queue/notifications";
+
+function getTextFromEvent(refined: RefinedEvent): string {
+  switch (refined.type) {
+    case "COMMENT":
+      return refined.event.text;
+    case "STORY_REPLY":
+      return refined.event.text;
+    case "DM_MESSAGE":
+      return refined.event.text;
+    default:
+      return "";
+  }
+}
 
 export async function filterEvents(
   events: RefinedEvent[],
@@ -34,7 +50,12 @@ export async function filterEvents(
           },
         );
 
-        if (!accountResult || !accountResult.isActive) return null;
+        if (
+          !accountResult ||
+          !accountResult.isActive ||
+          !accountResult.webhookUserId
+        )
+          return ok(null);
 
         let automations: Automation[] = [];
 
@@ -42,7 +63,7 @@ export async function filterEvents(
           case "COMMENT": {
             const mediaId = eventWrapper.event.mediaId;
             automations = await getAutomationsByPostR(
-              accountResult.id,
+              accountResult.webhookUserId,
               mediaId,
               async () => {
                 const res = await findActiveAutomationsByPost(
@@ -58,7 +79,7 @@ export async function filterEvents(
           case "STORY_REPLY": {
             const storyId = eventWrapper.event.storyId;
             automations = await getAutomationsByStoryR(
-              accountResult.id,
+              accountResult.webhookUserId,
               storyId,
               async () => {
                 const res = await findActiveAutomationsByStory(
@@ -72,7 +93,7 @@ export async function filterEvents(
           }
           case "DM_MESSAGE": {
             automations = await getAutomationsForAccountDMR(
-              accountResult.id,
+              accountResult.webhookUserId,
               async () => {
                 const res = await findActiveAutomationsForAccountDM(
                   accountResult.id,
@@ -86,13 +107,13 @@ export async function filterEvents(
           case "QUICK_REPLY": {
             const payload = eventWrapper.payload;
             const parts = payload.split(":");
+            // QR Format: ACTION:AUTOMATION_ID:ORIGIN_EVENT_ID
             const automationId = parts[1] || "";
             const originEventId = parts[2] || "";
 
-            eventWrapper.originEventId = originEventId;
-
             if (automationId) {
               const automation = await getAutomationByIdR(
+                accountResult.webhookUserId,
                 automationId,
                 async () => {
                   const res = await findAutomationById(automationId);
@@ -100,38 +121,35 @@ export async function filterEvents(
                 },
               );
 
-              // SECURITY: Ensure the requested automation corresponds to the current IG account.
-              // This prevents cross-account binding via crafted or stale payloads.
+              // SECURITY: Ensure the automation belongs to this account
               if (
                 automation &&
                 automation.instaAccountId === accountResult.id &&
                 automation.status === "ACTIVE"
               ) {
-                return {
-                  event: eventWrapper,
+                return ok({
+                  event: { ...eventWrapper, originEventId },
                   accountId: accountResult.id,
                   clerkUserId: accountResult.user.clerkId,
                   userId: accountResult.userId,
+                  webhookUserId: accountResult.webhookUserId,
                   instagramUsername: accountResult.username,
                   matchedAutomations: [automation],
-                } as FilteredEvent;
+                } as FilteredEvent);
               }
             }
-
-            // If no automation is found for a QUICK_REPLY, it's a "ghost" interaction (deleted automation) — drop the event.
-            return null;
+            return ok(null);
           }
 
           default:
-            return null;
+            return ok(null);
         }
 
-        if (automations.length === 0) return null;
+        if (automations.length === 0) return ok(null);
 
-        const textTarget =
-          eventWrapper.type === "COMMENT"
-            ? eventWrapper.event.text
-            : (eventWrapper.event as any).text;
+        const textTarget = getTextFromEvent(eventWrapper);
+
+        if (typeof textTarget !== "string" || !textTarget) return ok(null);
 
         const matches: Automation[] = [];
         const specificAutomations = automations.filter(
@@ -142,6 +160,20 @@ export async function filterEvents(
         );
 
         for (const automation of specificAutomations) {
+          if (automation.matchType === "REGEX") {
+            logger.warn(
+              { automationId: automation.id },
+              "Deactivating automation with unsupported REGEX matchType",
+            );
+            // Explicit user-facing handling: Pause the automation and notify
+            await pauseAutomation(automation.id, automation.instaAccountId);
+            await addNotificationJob({
+              type: "REGEX_UNSUPPORTED",
+              userId: accountResult.userId,
+              automationId: automation.id,
+            });
+            continue;
+          }
           const commentText = textTarget.toLowerCase().trim();
           let isMatch = false;
 
@@ -159,33 +191,76 @@ export async function filterEvents(
               break;
             }
           }
-          if (matches.length > 0) break;
+          // Multiple automations per event are allowed - scanning all specific matches
         }
 
         if (matches.length === 0 && anyKeywordAutomations.length > 0) {
           matches.push(anyKeywordAutomations[0]);
         }
 
-        if (matches.length > 0) {
-          return {
-            event: eventWrapper,
-            accountId: accountResult.id,
-            clerkUserId: accountResult.user.clerkId,
-            userId: accountResult.userId,
-            instagramUsername: accountResult.username,
-            matchedAutomations: matches,
-          } as FilteredEvent;
-        }
-        return null;
-      } catch (err) {
-        // Isolate failure to this specific event
-        return null;
+        return ok(
+          matches.length > 0
+            ? ({
+                event: eventWrapper,
+                accountId: accountResult.id,
+                clerkUserId: accountResult.user.clerkId,
+                userId: accountResult.userId,
+                webhookUserId: accountResult.webhookUserId,
+                instagramUsername: accountResult.username,
+                matchedAutomations: matches,
+              } as FilteredEvent)
+            : null,
+        );
+      } catch (err: any) {
+        logger.error(
+          {
+            err,
+            eventType: eventWrapper.type,
+            instagramUserId: eventWrapper.instagramUserId,
+          },
+          "Error filtering individual event",
+        );
+        return fail(
+          new FilterError(
+            "filterEvents",
+            "Transient failure during event filtering",
+            { eventType: eventWrapper.type },
+            err,
+          ),
+        );
       }
     }),
   );
 
-  const filtered = filterResults.filter(
-    (item): item is FilteredEvent => item !== null,
-  );
+  const filtered: FilteredEvent[] = [];
+  const failures: any[] = [];
+  let skipCount = 0;
+
+  for (const res of filterResults) {
+    if (res.ok) {
+      if (res.value) {
+        filtered.push(res.value);
+      } else {
+        skipCount++;
+      }
+    } else {
+      failures.push(res.error);
+    }
+  }
+
+  if (failures.length > 0) {
+    logger.warn(
+      { failureCount: failures.length, successCount: filtered.length },
+      "Filter Stage: Some events failed filtering and will be dropped/logged.",
+    );
+  }
+
+  if (skipCount > 0) {
+    logger.info(
+      { skipCount, successCount: filtered.length },
+      "Filter Stage orchestration completed with skips",
+    );
+  }
+
   return ok(filtered);
 }

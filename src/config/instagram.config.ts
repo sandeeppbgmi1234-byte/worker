@@ -17,8 +17,9 @@ export const RATE_LIMITS = {
 } as const;
 
 export const RATE_LIMIT_THRESHOLDS = {
-  APP_USAGE_STOP_PERCENT: 85,
-  ACCOUNT_USAGE_STOP_PERCENT: 90,
+  SAFE_MODE_THRESHOLD: 85,
+  PANIC_THRESHOLD: 90,
+  MAX_WORKER_USAGE: 95,
 } as const;
 
 export const QUICK_REPLIES = {
@@ -59,4 +60,8 @@ export const ERROR_MESSAGES = {
     RATE_LIMIT_EXCEEDED: "Message rate limit exceeded. Please try again later.",
     MESSAGE_TOO_LONG: "Message exceeds maximum length of 1000 characters.",
   },
+} as const;
+export const MESSAGING_DEFAULTS = {
+  FOLLOW_REMINDER:
+    "Please follow to access the link 🔔. This reminder expires after one hour ⏳. Once you have followed, click ‘I am Following’ above to continue ✅",
 } as const;

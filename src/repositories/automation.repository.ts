@@ -70,6 +70,9 @@ export async function findAutomationById(
   );
 }
 
+/**
+ * Fetches "RESPOND_TO_ALL_DMS" automations for a specific account.
+ */
 export async function findActiveAutomationsForAccountDM(
   instaAccountId: string,
 ): Promise<Result<Automation[], DatabaseError>> {
@@ -87,6 +90,44 @@ export async function findActiveAutomationsForAccountDM(
     },
     {
       operation: "findActiveAutomationsForAccountDM",
+      model: "Automation",
+      retries: 1,
+    },
+  );
+}
+export async function pauseAutomation(
+  automationId: string,
+  instaAccountId: string,
+): Promise<Result<Automation, DatabaseError>> {
+  return executeWithErrorHandling(
+    async () => {
+      const { count } = await prisma.automation.updateMany({
+        where: {
+          id: automationId,
+          instaAccountId,
+        },
+        data: { status: "PAUSED" },
+      });
+
+      if (count === 0) {
+        throw new Error(
+          `Automation ${automationId} not found for account ${instaAccountId}`,
+        );
+      }
+
+      // Re-fetch to return the updated record as expected by the result type
+      const updated = await prisma.automation.findUnique({
+        where: { id: automationId },
+      });
+
+      if (!updated) {
+        throw new Error(`Automation ${automationId} vanished after update`);
+      }
+
+      return updated;
+    },
+    {
+      operation: "pauseAutomation",
       model: "Automation",
       retries: 1,
     },

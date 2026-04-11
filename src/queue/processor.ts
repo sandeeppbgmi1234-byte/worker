@@ -25,7 +25,7 @@ export async function processWebhookJob(
   const payload = job.data as InstagramWebhookPayload;
   const jobLogger = logger.child({
     jobId: job.id,
-    attempt: job.attemptsMade + 1,
+    attempt: job.attemptsStarted,
   });
   jobLogger.info({ payload: job.data }, `Processing job ${job.id}`);
 
@@ -67,19 +67,19 @@ export async function processWebhookJob(
     }
     if (err instanceof InstagramRateLimitError) {
       jobLogger.warn(`Instagram Rate Limit hit. Delaying job.`);
-      const delayMs = err.isAppLevel ? 5 * 60_000 : 10 * 60_000;
+      const defaultDelay = err.isAppLevel
+        ? WORKER_CONFIG.DELAYS.RATE_LIMIT_APP_LEVEL_MS
+        : WORKER_CONFIG.DELAYS.RATE_LIMIT_ACCOUNT_LEVEL_MS;
+      const delayMs = err.retryAfterMs ?? defaultDelay;
       await job.moveToDelayed(Date.now() + delayMs, token);
       throw new DelayedError();
     }
 
-    const isTerminalError =
-      err instanceof InstagramTokenExpiredError ||
-      err instanceof InstagramSpamPolicyError;
-
-    if (!isTerminalError && job.attemptsStarted < WORKER_CONFIG.MAX_RETRIES) {
-      const delayMs = Math.pow(2, job.attemptsStarted) * 2000; // 2s, 4s, 8s backoff
+    const currentRetryCount = job.attemptsMade;
+    if (currentRetryCount < WORKER_CONFIG.MAX_RETRIES) {
+      const delayMs = Math.pow(2, currentRetryCount) * 2000; // 2s, 4s, 8s backoff
       jobLogger.warn(
-        { error: err.message, attempt: job.attemptsStarted, delayMs },
+        { error: err.message, attempt: currentRetryCount + 1, delayMs },
         "Retriable error occurred. Moving job to delayed queue for backoff.",
       );
       await job.moveToDelayed(Date.now() + delayMs, token);

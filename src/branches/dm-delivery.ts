@@ -1,7 +1,4 @@
-import {
-  checkRateLimits,
-  incrementApiUsage,
-} from "../redis/operations/rate-limit";
+import { checkRateLimits } from "../redis/operations/rate-limit";
 import { Result, ok, fail } from "../helpers/result";
 import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
@@ -24,7 +21,7 @@ export async function executeDmDelivery(
   event: DmDeliveryEvent,
   automation: Automation,
   accessToken: string,
-  instagramUserId: string,
+  webhookUserId: string,
   isQuickReplyBypass: boolean = false,
 ): Promise<Result<DmDeliveryResult, BaseError>> {
   const hasContent =
@@ -36,8 +33,14 @@ export async function executeDmDelivery(
     return ok({ sentMessage: "", instagramMessageId: null });
   }
 
-  await checkRateLimits(instagramUserId);
-  await incrementApiUsage(instagramUserId, 1); // Always 1 now
+  try {
+    await checkRateLimits(webhookUserId);
+  } catch (error: any) {
+    if (error instanceof BaseError) return fail(error);
+    return fail(
+      new BaseError("DmDelivery", error?.message || String(error), {}, error),
+    );
+  }
 
   // Reverting to `comment_id` for COMMENT triggers because `recipient.id`
   // enforces the strict 24-hour window, while `comment_id` allows the 7-day Private Reply window.
@@ -66,7 +69,7 @@ export async function executeDmDelivery(
     messagePayload = { attachment: templateAttachment };
   }
 
-  const msgUrl = buildGraphApiUrl(`${instagramUserId}/messages`);
+  const msgUrl = buildGraphApiUrl(`${webhookUserId}/messages`);
 
   const body = {
     recipient,
@@ -80,7 +83,7 @@ export async function executeDmDelivery(
     {
       method: "POST",
       body,
-      instagramUserId,
+      webhookUserId,
       retries: 0,
     },
   );

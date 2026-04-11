@@ -1,5 +1,5 @@
 import { prisma } from "../db/db";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import type { Worker } from "bullmq";
 import { REDIS_CONNECTION, QUEUE_CONNECTION } from "../config/redis.config";
 import type { ServiceHealth } from "./types";
@@ -25,30 +25,31 @@ export async function checkDatabase(): Promise<ServiceHealth> {
 
 async function checkRedisInstance(
   name: string,
-  clientGetter: () => any,
+  clientGetter: () => Redis | null,
 ): Promise<ServiceHealth> {
   const start = Date.now();
-  const redis = clientGetter();
-  if (!redis) {
-    return {
-      status: "DOWN",
-      details: { error: "Redis client not initialized", serviceName: name },
-    };
-  }
-
   try {
+    const redis = clientGetter();
+    if (!redis) {
+      return {
+        status: "DOWN",
+        details: { error: "Redis client not initialized", serviceName: name },
+      };
+    }
+
     const res = await redis.ping();
-    if (res !== "PONG") throw new Error("Recieved unexpected ping response");
+    if (res !== "PONG") throw new Error("Received unexpected ping response");
     return {
       status: "UP",
       latency: Date.now() - start,
     };
-  } catch (error) {
+  } catch (error: any) {
     return {
       status: "DOWN",
       details: {
         error: error instanceof Error ? error.message : "Ping failed",
         serviceName: name,
+        elapsedMs: Date.now() - start,
       },
     };
   }

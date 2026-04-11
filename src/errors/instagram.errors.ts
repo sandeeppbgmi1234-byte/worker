@@ -21,17 +21,20 @@ export class InstagramError extends BaseError {
 
 export class InstagramRateLimitError extends InstagramError {
   public isAppLevel: boolean;
+  public retryAfterMs?: number;
 
   constructor(
     operation: string,
     message: string,
     isAppLevel: boolean,
+    retryAfterMs?: number,
     context?: Record<string, unknown>,
     originalError?: unknown,
   ) {
     super(operation, message, 429, true, context, originalError);
     this.name = "InstagramRateLimitError";
     this.isAppLevel = isAppLevel;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 

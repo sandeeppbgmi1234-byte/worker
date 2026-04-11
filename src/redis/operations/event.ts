@@ -5,11 +5,14 @@ import { logger } from "../../logger";
 /**
  * Checks if a webhook event ID has already been permanently handled.
  */
-export async function isEventHandledR(eventId: string): Promise<boolean> {
+export async function isEventHandledR(
+  webhookUserId: string,
+  eventId: string,
+): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return false;
 
-  const key = KEYS.GLOBAL_EVENT_PROCESSED(eventId);
+  const key = KEYS.GLOBAL_EVENT_PROCESSED(webhookUserId, eventId);
 
   try {
     const exists = await redis.exists(key);
@@ -27,14 +30,18 @@ export type LockResult = "ACQUIRED" | "LOCKED" | "ERROR";
  * Hard-coded to 10 minutes; if the server crashes, the lock will expire allowing retry.
  * @returns ACQUIRED if the lock was successfully acquired, LOCKED if it already exists, ERROR on redis failure.
  */
-export async function acquireEventLockR(eventId: string): Promise<LockResult> {
+export async function acquireEventLockR(
+  webhookUserId: string,
+  eventId: string,
+): Promise<LockResult> {
   const redis = getRedisClient();
   if (!redis) return "ERROR";
 
-  const key = `lock:event:${eventId}`;
+  // Lock is also scoped by account just in case, though messageId is mostly global
+  const key = KEYS.EVENT_LOCK(webhookUserId, eventId);
 
   try {
-    const result = await redis.set(key, "1", "EX", 600, "NX");
+    const result = await redis.set(key, "1", "EX", TTL.EVENT_LOCK, "NX");
     // If result is "OK", the lock was acquired
     return result === "OK" ? "ACQUIRED" : "LOCKED";
   } catch (error: any) {
@@ -46,11 +53,14 @@ export async function acquireEventLockR(eventId: string): Promise<LockResult> {
 /**
  * Marks a webhook event ID as permanently handled (24 hours).
  */
-export async function setEventHandledR(eventId: string): Promise<void> {
+export async function setEventHandledR(
+  webhookUserId: string,
+  eventId: string,
+): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.GLOBAL_EVENT_PROCESSED(eventId);
+  const key = KEYS.GLOBAL_EVENT_PROCESSED(webhookUserId, eventId);
 
   try {
     await redis.set(key, "1", "EX", TTL.COMMENT_PROCESSED);

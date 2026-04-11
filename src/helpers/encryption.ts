@@ -20,14 +20,15 @@ function getEncryptionKey(): Buffer {
       "CRITICAL SECURITY ERROR: 'REDIS_ENCRYPTION_SECRET' is not defined. Secure token storage is required.",
     );
   }
-  // We use scrypt to derive a 32-byte key from whatever secret string is provided
-  cachedKey = scryptSync(secret, "dm-broo-salt", 32);
+  // Use a configurable salt, fallback to the legacy salt for backward compatibility
+  const salt = process.env.DM_BROO_SALT || "dm-broo-salt";
+  cachedKey = scryptSync(secret, salt, 32);
   return cachedKey;
 }
 
 /**
  * Encrypts a plain text string.
- * Output format: [iv_hex][tag_hex][encrypted_text_hex]
+ * Output format: iv_hex:tag_hex:encrypted_text_hex (colon-separated)
  */
 export function encrypt(text: string): string {
   const iv = randomBytes(IV_LENGTH);

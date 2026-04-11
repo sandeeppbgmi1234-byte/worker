@@ -2,6 +2,9 @@ import { getRedisClient } from "../client";
 import { KEYS, TTL } from "../keys";
 import { logger } from "../../logger";
 
+/**
+ * Fetches InstaAccount data from Redis with DB fallback.
+ */
 export async function getAccountByInstagramIdR<T>(
   instagramUserId: string,
   dbFallback: () => Promise<T | null>,
@@ -26,12 +29,15 @@ export async function getAccountByInstagramIdR<T>(
   }
 }
 
+/**
+ * Checks if a user connection is active in Redis.
+ */
 export async function isUserConnectedR(
-  instagramUserId: string,
+  webhookUserId: string,
   dbFallback: () => Promise<boolean>,
 ): Promise<boolean> {
   const redis = getRedisClient();
-  const key = KEYS.USER_CONNECTION(instagramUserId);
+  const key = KEYS.USER_CONNECTION(webhookUserId);
 
   if (!redis) {
     return dbFallback();
@@ -51,45 +57,92 @@ export async function isUserConnectedR(
   }
 }
 
-export async function setUserConnectedR(
-  instagramUserId: string,
-): Promise<void> {
+/**
+ * Sets user connection status in Redis.
+ */
+export async function setUserConnectedR(webhookUserId: string): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const key = KEYS.USER_CONNECTION(instagramUserId);
+  const key = KEYS.USER_CONNECTION(webhookUserId);
   try {
     await redis.set(key, "1", "EX", TTL.USER_CONNECTED);
-  } catch (error: any) {}
+  } catch (error: any) {
+    logger.error(
+      { webhookUserId, error: error.message },
+      "setUserConnectedR failed",
+    );
+  }
 }
 
-export async function clearAccountCacheR(
-  accountId: string,
-  instagramUserId: string,
+/**
+ * Invalidates ALL cache keys related to a specific Instagram account.
+ * This is used when a token is revoked or an account is deactivated.
+ */
+export async function invalidateUserCacheR(
+  clerkId: string,
+  webhookUserId: string,
+  instagramUserId?: string,
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
-  const keysToDelete = [
-    KEYS.ACCESS_TOKEN(accountId),
-    KEYS.ACCOUNT_BY_IG(instagramUserId),
-    KEYS.USER_CONNECTION(instagramUserId),
-    KEYS.ACCOUNT_USAGE(instagramUserId),
-    KEYS.INSTAGRAM_POSTS(instagramUserId),
-    KEYS.INSTAGRAM_STORIES(instagramUserId),
-    KEYS.PREDICTED_USAGE(instagramUserId),
-  ];
-
   try {
-    await redis.del(...keysToDelete);
+    const pipeline = redis.pipeline();
+
+    // 1. Delete direct lookup keys
+    pipeline.del(KEYS.USER_CONNECTION(webhookUserId));
+    if (instagramUserId) {
+      pipeline.del(KEYS.ACCOUNT_BY_IG(instagramUserId));
+    }
+    pipeline.del(KEYS.ACCESS_TOKEN(clerkId, webhookUserId));
+    pipeline.del(KEYS.TOKEN_REFRESH_LOCK(webhookUserId));
+    pipeline.del(KEYS.ACCOUNT_USAGE(webhookUserId));
+    pipeline.del(KEYS.INSTAGRAM_POSTS(webhookUserId));
+    pipeline.del(KEYS.INSTAGRAM_STORIES(webhookUserId));
+    pipeline.del(KEYS.AUTOMATIONS_FOR_ACCOUNT_DM(webhookUserId));
+
+    // 2. SCAN and delete dynamic automation keys (Post/Story specific)
+    const types = ["post", "story", "dm"];
+    for (const type of types) {
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await redis.scan(
+          cursor,
+          "MATCH",
+          `ig:automation:${type}:${webhookUserId}:*`,
+          "COUNT",
+          100,
+        );
+        cursor = nextCursor;
+        if (keys.length > 0) pipeline.del(...keys);
+      } while (cursor !== "0");
+    }
+
+    // 3. Scan for general automation keys (ig:automation:<webhookUserId>:<automationId>)
+    let cursor = "0";
+    do {
+      const [nextCursor, keys] = await redis.scan(
+        cursor,
+        "MATCH",
+        `ig:automation:${webhookUserId}:*`,
+        "COUNT",
+        100,
+      );
+      cursor = nextCursor;
+      if (keys.length > 0) pipeline.del(...keys);
+    } while (cursor !== "0");
+
+    await pipeline.exec();
+
     logger.info(
-      { accountId, instagramUserId },
-      "Cleared all account-related cache keys due to deactivation",
+      { clerkId, webhookUserId, instagramUserId },
+      "Purged all Redis cache keys for account due to deactivation/refresh.",
     );
   } catch (error: any) {
     logger.error(
-      { accountId, instagramUserId, error: error.message },
-      "Failed to clear account cache keys",
+      { clerkId, webhookUserId, instagramUserId, error: error.message },
+      "Failed to purge user cache keys.",
     );
   }
 }

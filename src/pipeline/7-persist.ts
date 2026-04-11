@@ -1,13 +1,17 @@
 import { ExecutionOutcome } from "../types";
 import { executeTransaction } from "../repositories/repository-utils";
 import { Result, ok, fail } from "../helpers/result";
-import { PersistenceError } from "../errors/pipeline.errors";
+import {
+  PersistenceError,
+  PipelineRetryableError,
+} from "../errors/pipeline.errors";
 import { getRedisClient } from "../redis/client";
 import { KEYS } from "../redis/keys";
 import { logger } from "../logger";
 import { setEventHandledR } from "../redis/operations/event";
 import { incrementCreditUsedR } from "../redis/operations/credits";
 import { getCreditLimitForPlan } from "../config/plans.config";
+import { prisma } from "../db/db";
 
 /**
  * Persists execution outcomes by pushing them to a Redis buffer (Write-Behind).
@@ -38,7 +42,6 @@ export async function persistOutcomes(
     pipeline.rpush(KEYS.PENDING_OUTCOMES, ...serializedOutcomes);
     const results = await pipeline.exec();
 
-    // Verify all pipeline commands succeeded
     if (results) {
       for (const [err] of results) {
         if (err) {
@@ -46,15 +49,6 @@ export async function persistOutcomes(
         }
       }
     }
-
-    // Now that outcomes are safely buffered, mark events as permanently handled
-    const uniqueEventIds = Array.from(new Set(outcomes.map((o) => o.eventId)));
-    await Promise.all(uniqueEventIds.map((id) => setEventHandledR(id)));
-
-    // Redis credits are now incremented by the Persistence Flusher after DB commit
-    // to maintain strict consistency and prevent drifts on flusher crashes.
-
-    return ok(undefined);
   } catch (error: any) {
     logger.error(
       { error: error.message },
@@ -62,6 +56,55 @@ export async function persistOutcomes(
     );
     return persistOutcomesSync(outcomes);
   }
+
+  // Identify which events should NOT be marked handled because they have at least one retryable outcome
+  const retryableEventIds = new Set(
+    outcomes
+      .filter((o) => o.retryable)
+      .map((o) => `${o.webhookUserId}:${o.eventId}`),
+  );
+
+  // Now that outcomes are safely buffered, mark non-retryable events as permanently handled
+  try {
+    const uniqueEvents = Array.from(
+      new Map(
+        outcomes
+          .filter(
+            (o) => !retryableEventIds.has(`${o.webhookUserId}:${o.eventId}`),
+          )
+          .map((o) => [`${o.webhookUserId}:${o.eventId}`, o]),
+      ).values(),
+    );
+
+    await Promise.all(
+      uniqueEvents.map((o) =>
+        setEventHandledR(o.webhookUserId, o.eventId).catch((e) =>
+          logger.warn(
+            { eventId: o.eventId, err: e.message },
+            "Minor: Failed to mark event as handled in Redis after successful buffering",
+          ),
+        ),
+      ),
+    );
+  } catch (error: any) {
+    // Non-fatal error as the buffer is already written
+    logger.warn(
+      { error: error.message },
+      "Outcome marker set partially failed",
+    );
+  }
+
+  // If any outcomes are retryable, throw to trigger BullMQ retry for the whole batch
+  const hasRetryable = outcomes.some((o) => o.retryable);
+  if (hasRetryable) {
+    throw new PipelineRetryableError(
+      "Persistence",
+      "Batch contains retryable outcomes. Triggering job retry.",
+      { retryableCount: outcomes.filter((o) => o.retryable).length },
+    );
+  }
+
+  return ok(undefined);
 }
 
 /**
@@ -69,28 +112,44 @@ export async function persistOutcomes(
  */
 async function persistOutcomesSync(
   outcomes: ExecutionOutcome[],
-): Promise<Result<void, PersistenceError>> {
+): Promise<Result<void, PersistenceError | PipelineRetryableError>> {
   let hasFailure = false;
   let lastError: any = null;
 
   for (const outcome of outcomes) {
     try {
+      const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
+        outcome.status,
+      );
+
       await executeTransaction(
         async (tx) => {
-          const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
-            outcome.status,
-          );
+          const executionKey = {
+            eventId: outcome.eventId || "unknown_event",
+            automationId: outcome.automationId,
+          };
 
-          await tx.automationExecution.create({
-            data: {
+          const execution = await tx.automationExecution.upsert({
+            where: {
+              eventId_automationId: executionKey,
+            },
+            update: {
+              status: outcome.status,
+              errorMessage: outcome.errorMessage || "",
+              instagramMessageId: outcome.instagramMessageId || "",
+              sentMessage: outcome.sentMessage || "",
+              executedAt: new Date(),
+              // Do not overwrite billed if it's already true
+            },
+            create: {
               automationId: outcome.automationId,
-              commentId: outcome.eventId || "unknown_event",
-              commentText: outcome.commentData.text || "Interaction",
-              commentUsername:
+              eventId: executionKey.eventId,
+              eventText: outcome.commentData.text || "Interaction",
+              senderUsername:
                 outcome.commentData.username ||
                 outcome.commentData.senderId ||
                 "unknown",
-              commentUserId:
+              senderId:
                 outcome.commentData.userId ||
                 outcome.commentData.senderId ||
                 "unknown",
@@ -100,11 +159,14 @@ async function persistOutcomesSync(
               errorMessage: outcome.errorMessage || "",
               instagramMessageId: outcome.instagramMessageId || "",
               executedAt: new Date(),
-              billed: isBillable,
+              billed: !!outcome.dbReserved,
             },
           });
 
-          if (isBillable) {
+          const shouldBillNow =
+            isBillable && !execution.billed && !outcome.dbReserved;
+
+          if (shouldBillNow) {
             // AUTHORITATIVE BILLING: Update DB ledger inside transaction
             const userState = await tx.user.findUnique({
               where: { clerkId: outcome.clerkUserId },
@@ -130,6 +192,12 @@ async function persistOutcomesSync(
                   creditsUsed: { increment: 1 },
                 },
               });
+
+              // Mark execution as billed successfully
+              await tx.automationExecution.update({
+                where: { id: execution.id },
+                data: { billed: true },
+              });
             }
           }
 
@@ -142,11 +210,6 @@ async function persistOutcomesSync(
               },
             });
           }
-
-          // Mark as handled after successful DB write
-          if (outcome.eventId) {
-            await setEventHandledR(outcome.eventId);
-          }
         },
         {
           operation: "persistPipelineOutcomeSync",
@@ -154,14 +217,11 @@ async function persistOutcomesSync(
         },
       );
 
-      // POST-COMMIT: Update Redis cache if available
-      const isBillable = ["SUCCESS", "OPENING_MESSAGE_SENT"].includes(
-        outcome.status,
-      );
-      if (isBillable) {
-        await incrementCreditUsedR(outcome.clerkUserId).catch(() => {
-          // Swallow Redis errors here as the DB is already durable
-        });
+      // POST-COMMIT: Update Redis state if available, but only if not retryable
+      if (outcome.eventId && !outcome.retryable) {
+        await setEventHandledR(outcome.webhookUserId, outcome.eventId).catch(
+          () => {},
+        );
       }
     } catch (error: any) {
       hasFailure = true;
@@ -182,6 +242,17 @@ async function persistOutcomesSync(
       new PersistenceError(
         `Failed to persist ${outcomes.length} outcomes in sync fallback.`,
         lastError,
+      ),
+    );
+  }
+
+  const hasRetryable = outcomes.some((o) => o.retryable);
+  if (hasRetryable) {
+    return fail(
+      new PipelineRetryableError(
+        "PersistenceSync",
+        "Batch contains retryable outcomes in sync fallback. Triggering job retry.",
+        { retryableCount: outcomes.filter((o) => o.retryable).length },
       ),
     );
   }

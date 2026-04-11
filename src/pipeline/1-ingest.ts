@@ -36,9 +36,23 @@ export function ingestWebhook(
   const validEntries: WebhookEntry[] = [];
 
   for (const entry of payload.entry) {
+    if (!entry || typeof entry !== "object") {
+      logger.warn(
+        { isNull: entry === null, type: typeof entry },
+        "Discarding entry: Not a valid object",
+      );
+      continue;
+    }
+
     if (!entry.id || typeof entry.id !== "string") {
       logger.warn(
-        { entry },
+        {
+          id: entry?.id,
+          recipientId:
+            (entry as any)?.recipient?.id || (entry as any)?.recipient,
+          timestamp: (entry as any)?.time,
+          type: (entry as any)?.type,
+        },
         "Discarding entry: Missing or invalid 'id' (recipient IG ID)",
       );
       continue;

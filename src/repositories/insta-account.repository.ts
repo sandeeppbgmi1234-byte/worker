@@ -13,9 +13,22 @@ const INSTA_ACCOUNT_SELECT = {
   user: { select: { clerkId: true } },
 } as const;
 
+export interface InstaAccountWithClerk {
+  id: string;
+  userId: string;
+  username: string;
+  accessToken: string;
+  instagramUserId: string;
+  webhookUserId: string | null;
+  isActive: boolean;
+  user: {
+    clerkId: string;
+  };
+}
+
 export async function findInstaAccountByPlatformId(
   platformId: string,
-): Promise<Result<any, DatabaseError>> {
+): Promise<Result<InstaAccountWithClerk, DatabaseError>> {
   const idString = String(platformId);
 
   const fallbackLookup = async () => {

@@ -206,6 +206,9 @@ async function persistOutcomesSync(
               where: { id: outcome.automationId },
               data: {
                 timesTriggered: { increment: 1 },
+                newFollowersGained: outcome.isFollowGated
+                  ? { increment: 1 }
+                  : undefined,
                 lastTriggeredAt: new Date(),
               },
             });

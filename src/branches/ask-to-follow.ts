@@ -5,12 +5,14 @@ import { BaseError } from "../errors/base.error";
 import { buildGraphApiUrl } from "../instagram/endpoints";
 import { fetchFromInstagram } from "../instagram/gateway";
 import { buildAskToFollowTemplate } from "../templates";
+import { sanitizeUsername } from "../helpers/sanitize";
 
 interface AskToFollowEvent {
   id?: string;
   userId?: string;
   senderId?: string;
   text?: string;
+  username?: string;
   originEventId?: string;
 }
 
@@ -20,8 +22,21 @@ export async function executeAskToFollow(
   accessToken: string,
   webhookUserId: string,
   instagramUsername: string,
-): Promise<Result<"PROCEED" | "HALT" | "NEEDS_OPENING_MESSAGE", BaseError>> {
-  if (!automation.askToFollowEnabled) return ok("PROCEED");
+): Promise<
+  Result<
+    { status: "PROCEED" | "HALT" | "NEEDS_OPENING_MESSAGE"; username?: string },
+    BaseError
+  >
+> {
+  const needsUsername = !event.username;
+  const gateEnabled = automation.askToFollowEnabled;
+
+  if (!gateEnabled && !needsUsername) {
+    return ok({ status: "PROCEED", username: event.username });
+  }
+
+  // If gate is disabled but we have no username, we continue to the fetch logic
+  // but we won't HALT at the end if the user is not following.
 
   await checkRateLimits(webhookUserId);
 
@@ -35,7 +50,7 @@ export async function executeAskToFollow(
   const originEventId = event.originEventId || event.id || "unknown";
 
   const url = buildGraphApiUrl(commenterId!);
-  url.searchParams.set("fields", "is_user_follow_business");
+  url.searchParams.set("fields", "is_user_follow_business,username");
   url.searchParams.set("access_token", accessToken);
 
   const followerRes = await fetchFromInstagram<any>(url.toString(), {
@@ -45,14 +60,19 @@ export async function executeAskToFollow(
 
   if (!followerRes.ok) {
     if (followerRes.error.message.includes("User consent")) {
-      return ok("NEEDS_OPENING_MESSAGE");
+      return ok({ status: "NEEDS_OPENING_MESSAGE", username: undefined });
     }
     return fail(followerRes.error);
   }
 
   const isFollowing = followerRes.value?.is_user_follow_business === true;
+  const username = followerRes.value?.username
+    ? sanitizeUsername(followerRes.value.username)
+    : undefined;
 
   if (!isFollowing) {
+    if (!gateEnabled) return ok({ status: "PROCEED", username });
+
     const recipient = event.id
       ? { comment_id: event.id }
       : { id: commenterId! };
@@ -65,7 +85,7 @@ export async function executeAskToFollow(
         commenterId!,
         automation.id,
       );
-      if (!acquired) return ok("HALT");
+      if (!acquired) return ok({ status: "HALT", username });
 
       await checkRateLimits(webhookUserId);
 
@@ -85,7 +105,7 @@ export async function executeAskToFollow(
 
       if (!res.ok) return fail(res.error);
 
-      return ok("HALT");
+      return ok({ status: "HALT", username });
     }
 
     // Case 2: Initial Trigger - send the Template card
@@ -118,8 +138,8 @@ export async function executeAskToFollow(
     });
 
     if (!result.ok) return fail(result.error);
-    return ok("HALT");
+    return ok({ status: "HALT", username });
   }
 
-  return ok("PROCEED");
+  return ok({ status: "PROCEED", username });
 }

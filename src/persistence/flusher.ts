@@ -283,18 +283,32 @@ async function flushBufferToDb(): Promise<void> {
             }
           }
 
-          const newSuccessIds = outcomes
-            .filter((o: any) => o.status === "SUCCESS" && o.isNew)
-            .map((o: any) => o.automationId);
-
-          if (newSuccessIds.length > 0) {
-            const counts: Record<string, number> = {};
-            for (const id of newSuccessIds) counts[id] = (counts[id] || 0) + 1;
-            for (const [autoId, count] of Object.entries(counts)) {
+          const newSuccessOutcomes = outcomes.filter(
+            (o: any) => o.status === "SUCCESS" && o.isNew,
+          );
+          if (newSuccessOutcomes.length > 0) {
+            const stats: Record<
+              string,
+              { triggers: number; followers: number }
+            > = {};
+            for (const o of newSuccessOutcomes) {
+              if (!stats[o.automationId]) {
+                stats[o.automationId] = { triggers: 0, followers: 0 };
+              }
+              stats[o.automationId].triggers += 1;
+              if (o.isFollowGated) {
+                stats[o.automationId].followers += 1;
+              }
+            }
+            for (const [autoId, data] of Object.entries(stats)) {
               await tx.automation.update({
                 where: { id: autoId },
                 data: {
-                  timesTriggered: { increment: count },
+                  timesTriggered: { increment: data.triggers },
+                  newFollowersGained:
+                    data.followers > 0
+                      ? { increment: data.followers }
+                      : undefined,
                   lastTriggeredAt: new Date(),
                 },
               });

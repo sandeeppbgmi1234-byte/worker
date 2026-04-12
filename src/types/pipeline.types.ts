@@ -44,6 +44,7 @@ export interface ValidatedStoryReply {
   messageId: string;
   text: string;
   senderId: string;
+  username?: string;
   storyId: string;
   timestamp: string;
 }
@@ -52,6 +53,7 @@ export interface ValidatedDm {
   messageId: string;
   text: string;
   senderId: string;
+  username?: string;
   timestamp: string;
 }
 
@@ -132,4 +134,5 @@ export interface ExecutionOutcome {
   actionType: string;
   commentData: any;
   dbReserved?: boolean;
+  isFollowGated?: boolean;
 }

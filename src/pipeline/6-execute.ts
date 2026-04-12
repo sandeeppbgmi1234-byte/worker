@@ -209,8 +209,11 @@ async function runExecutionFlow(
         const resolvedAskRes =
           isOpeningMessageFlow &&
           askRes.ok &&
-          askRes.value === "NEEDS_OPENING_MESSAGE"
-            ? ok("PROCEED" as const)
+          askRes.value.status === "NEEDS_OPENING_MESSAGE"
+            ? ok({
+                status: "PROCEED" as const,
+                username: askRes.value.username,
+              })
             : askRes;
 
         if (!resolvedAskRes.ok) {
@@ -228,7 +231,12 @@ async function runExecutionFlow(
           } as ExecutionOutcome;
         }
 
-        if (resolvedAskRes.value === "HALT") {
+        // Update username in the event if it was fetched
+        if (resolvedAskRes.value.username) {
+          (wrapper.event.event as any).username = resolvedAskRes.value.username;
+        }
+
+        if (resolvedAskRes.value.status === "HALT") {
           if (userId)
             await setPendingConfirmationR(
               wrapper.webhookUserId,
@@ -263,7 +271,7 @@ async function runExecutionFlow(
           } as ExecutionOutcome;
         }
 
-        if (resolvedAskRes.value === "NEEDS_OPENING_MESSAGE") {
+        if (resolvedAskRes.value.status === "NEEDS_OPENING_MESSAGE") {
           if (wrapper.event.type === "STORY_REPLY") {
             // Bypass
           } else {
@@ -399,6 +407,7 @@ async function runExecutionFlow(
             instagramMessageId: dmRes.value.instagramMessageId,
             errorMessage: !replyRes.ok ? replyRes.error.message : undefined,
             dbReserved: wrapper.dbReserved,
+            isFollowGated: isFollowConfirmFlow,
           } as ExecutionOutcome;
         }
 

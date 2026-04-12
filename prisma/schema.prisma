@@ -15,6 +15,8 @@ model User {
   imageUrl      String?
   createdAt     DateTime       @default(now())
   instaAccounts InstaAccount[]
+  automations   Automation[]
+  forms         Form[]
   subscription  Subscription?
   creditLedger  CreditLedger?
 
@@ -101,6 +103,8 @@ type StoryTarget {
 
 model Automation {
   id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String       @db.ObjectId
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   instaAccountId String       @db.ObjectId
   instaAccount   InstaAccount @relation(fields: [instaAccountId], references: [id], onDelete: Cascade)
 
@@ -133,9 +137,10 @@ model Automation {
 
   useVariables Boolean @default(true)
 
-  status            String @default("ACTIVE") // ACTIVE, PAUSED, DELETED
-  timesTriggered    Int    @default(0)
-  triggersSignature String @default("")
+  status             String @default("ACTIVE") // ACTIVE, PAUSED, DELETED
+  timesTriggered     Int    @default(0)
+  newFollowersGained Int    @default(0)
+  triggersSignature  String @default("")
 
   lastTriggeredAt DateTime?
 
@@ -176,21 +181,6 @@ model AutomationExecution {
   @@map("automation_executions")
 }
 
-model WebhookEvent {
-  id              String    @id @default(auto()) @map("_id") @db.ObjectId
-  eventType       String // comment, message
-  instagramUserId String
-  payload         Json // Raw webhook payload
-  processed       Boolean   @default(false)
-  processedAt     DateTime?
-  error           String?
-  receivedAt      DateTime  @default(now())
-
-  @@index([instagramUserId, processed])
-  @@index([receivedAt])
-  @@map("webhook_events")
-}
-
 // Option for dropdown/checkbox fields
 type FormFieldOption {
   id    String
@@ -209,6 +199,8 @@ type FormFieldEntry {
 
 model Form {
   id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String       @db.ObjectId
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   instaAccountId String       @db.ObjectId
   instaAccount   InstaAccount @relation(fields: [instaAccountId], references: [id], onDelete: Cascade)
 

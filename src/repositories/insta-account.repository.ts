@@ -10,6 +10,7 @@ const INSTA_ACCOUNT_SELECT = {
   instagramUserId: true,
   webhookUserId: true,
   isActive: true,
+  tokenExpiresAt: true,
   user: { select: { clerkId: true } },
 } as const;
 
@@ -21,6 +22,7 @@ export interface InstaAccountWithClerk {
   instagramUserId: string;
   webhookUserId: string | null;
   isActive: boolean;
+  tokenExpiresAt: Date;
   user: {
     clerkId: string;
   };
@@ -50,4 +52,25 @@ export async function findInstaAccountByPlatformId(
     model: "InstaAccount",
     retries: 1,
   });
+}
+
+/**
+ * Deactivates an Instagram account by setting isActive: false.
+ */
+export async function deactivateInstaAccount(
+  accountId: string,
+): Promise<Result<void, DatabaseError>> {
+  return executeWithErrorHandling(
+    async () => {
+      await prisma.instaAccount.update({
+        where: { id: accountId },
+        data: { isActive: false },
+      });
+    },
+    {
+      operation: "deactivateInstaAccount",
+      model: "InstaAccount",
+      retries: 1,
+    },
+  );
 }

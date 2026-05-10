@@ -1,4 +1,4 @@
-import type { Automation } from "@prisma/client";
+import type { Automation, ActionType, ExecutionStatus } from "@prisma/client";
 
 export interface WebhookEntry {
   id: string;
@@ -121,17 +121,12 @@ export interface ExecutionOutcome {
   webhookUserId: string; // Instagram Webhook ID (178...)
   eventId: string;
 
-  status:
-    | "SUCCESS"
-    | "FAILED"
-    | "ASK_TO_FOLLOW_SENT"
-    | "OPENING_MESSAGE_SENT"
-    | "SKIPPED";
+  status: ExecutionStatus;
   errorMessage?: string;
   retryable?: boolean;
   sentMessage?: string;
   instagramMessageId?: string | null;
-  actionType: string;
+  actionType: ActionType;
   commentData: any;
   dbReserved?: boolean;
   isFollowGated?: boolean;

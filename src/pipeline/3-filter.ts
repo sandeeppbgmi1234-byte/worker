@@ -5,7 +5,10 @@ import {
   getAutomationByIdR,
   getAutomationsForAccountDMR,
 } from "../redis/operations/automation";
-import { findInstaAccountByPlatformId } from "../repositories/insta-account.repository";
+import {
+  findInstaAccountByPlatformId,
+  deactivateInstaAccount,
+} from "../repositories/insta-account.repository";
 import {
   findActiveAutomationsByPost,
   findActiveAutomationsByStory,
@@ -56,6 +59,53 @@ export async function filterEvents(
           !accountResult.webhookUserId
         )
           return ok(null);
+
+        // --- HARD-STOP: Token Expiration Check ---
+        const now = new Date();
+        if (
+          accountResult.tokenExpiresAt &&
+          new Date(accountResult.tokenExpiresAt) < now
+        ) {
+          logger.warn(
+            {
+              accountId: accountResult.id,
+              username: accountResult.username,
+              expiredAt: accountResult.tokenExpiresAt,
+            },
+            "Dropping webhook event: Instagram Token has Expired.",
+          );
+
+          // 1. Trigger notification job (idempotency handled by BullMQ jobId)
+          await addNotificationJob({
+            type: "TOKEN_EXPIRED",
+            userId: accountResult.user.clerkId,
+            accountId: accountResult.id,
+            expiredAt: new Date(accountResult.tokenExpiresAt).getTime(),
+          });
+
+          // 2. Persistence cleanup: Deactivate account
+          const deactivationResult = await deactivateInstaAccount(accountResult.id);
+
+          if (!deactivationResult.ok) {
+            logger.error(
+              {
+                accountId: accountResult.id,
+                error: deactivationResult.error,
+              },
+              "Failed to deactivate Instagram account after token expiry.",
+            );
+            return fail(
+              new PipelineRetryableError(
+                "filterEvents",
+                "Failed to deactivate account after token expiry",
+                { accountId: accountResult.id },
+                deactivationResult.error,
+              ),
+            );
+          }
+
+          return ok(null);
+        }
 
         let automations: Automation[] = [];
 

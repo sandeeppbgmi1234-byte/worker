@@ -84,7 +84,25 @@ export async function filterEvents(
           });
 
           // 2. Persistence cleanup: Deactivate account
-          await deactivateInstaAccount(accountResult.id);
+          const deactivationResult = await deactivateInstaAccount(accountResult.id);
+
+          if (!deactivationResult.ok) {
+            logger.error(
+              {
+                accountId: accountResult.id,
+                error: deactivationResult.error,
+              },
+              "Failed to deactivate Instagram account after token expiry.",
+            );
+            return fail(
+              new PipelineRetryableError(
+                "filterEvents",
+                "Failed to deactivate account after token expiry",
+                { accountId: accountResult.id },
+                deactivationResult.error,
+              ),
+            );
+          }
 
           return ok(null);
         }

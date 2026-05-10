@@ -63,5 +63,5 @@ export const ERROR_MESSAGES = {
 } as const;
 export const MESSAGING_DEFAULTS = {
   FOLLOW_REMINDER:
-    "Please follow to access the link 🔔. This reminder expires after one hour ⏳. Once you have followed, click ‘I am Following’ above to continue ✅",
+    "Please follow to access the link 🔔. This reminder will appear only 1 time ⏳. Once you have followed, click ‘I am Following’ above to continue ✅",
 } as const;

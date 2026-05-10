@@ -301,6 +301,15 @@ export async function guardEvents(
             // Only reserve for events that will trigger an action
             const reservation = await reserveCreditsR(clerkUserId, ownerId, 1);
             if (!reservation.success) {
+              // Trigger the Quota Full email notification asynchronously
+              addNotificationJob({
+                type: "QUOTA_FULL",
+                userId: clerkUserId,
+                usedAt: Date.now(),
+              }).catch((err) => {
+                logger.error({ err }, "Failed to dispatch QUOTA_FULL notification");
+              });
+
               batchResults.push({
                 success: false,
                 errorType: "quota_exceeded",

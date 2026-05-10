@@ -4,6 +4,7 @@ import { fetchFromInstagram } from "./gateway";
 import { RefreshTokenResponse } from "../types/instagram.types";
 import { invalidateUserCacheR } from "../redis/operations/user";
 import { logger } from "../logger";
+import { encrypt, decrypt } from "../helpers/encryption";
 import { InstagramTokenExpiredError } from "../errors/instagram.errors";
 
 export async function refreshAccessToken(
@@ -18,7 +19,7 @@ export async function refreshAccessToken(
   try {
     const params = new URLSearchParams({
       grant_type: "ig_refresh_token",
-      access_token: account.accessToken,
+      access_token: decrypt(account.accessToken),
     });
 
     const url = `https://graph.instagram.com/refresh_access_token?${params.toString()}`;
@@ -37,7 +38,7 @@ export async function refreshAccessToken(
     await prisma.instaAccount.update({
       where: { id: accountId },
       data: {
-        accessToken: data.access_token,
+        accessToken: encrypt(data.access_token),
         tokenExpiresAt: expiresAt,
         lastSyncedAt: new Date(),
       },
@@ -144,7 +145,7 @@ export async function getValidAccessToken(accountId: string): Promise<string> {
 
   if (isTokenExpiringSoon(account.tokenExpiresAt)) {
     const { accessToken } = await refreshAccessToken(accountId);
-    return accessToken;
+    return accessToken; // refreshAccessToken returns plain token
   }
-  return account.accessToken;
+  return decrypt(account.accessToken);
 }

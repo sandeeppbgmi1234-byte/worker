@@ -38,6 +38,12 @@ export type NotificationPayload =
       type: "REGEX_UNSUPPORTED";
       userId: string;
       automationId: string;
+    }
+  | {
+      type: "TOKEN_EXPIRED";
+      userId: string;
+      accountId: string;
+      expiredAt: number;
     };
 
 /**
@@ -55,10 +61,18 @@ export async function addNotificationJob(payload: NotificationPayload) {
       .digest("hex")
       .substring(0, 10);
 
-    const typePrefix =
-      payload.type === "QUOTA_FULL" ? "quota_full" : "regex_ns";
-    const subId =
-      payload.type === "REGEX_UNSUPPORTED" ? payload.automationId : windowId;
+    let typePrefix = "unknown";
+    let subId: string | number = windowId;
+
+    if (payload.type === "QUOTA_FULL") {
+      typePrefix = "quota_full";
+    } else if (payload.type === "REGEX_UNSUPPORTED") {
+      typePrefix = "regex_ns";
+      subId = payload.automationId;
+    } else if (payload.type === "TOKEN_EXPIRED") {
+      typePrefix = "token_expired";
+      subId = payload.accountId;
+    }
 
     const jobId = `${typePrefix}-${hashedUserId}-${subId}`;
     await queue.add(payload.type, payload, {
